@@ -1,3 +1,5 @@
+#include <Arduino.h> 
+
 const uint32_t moon_width = 75;
 const uint32_t moon_height = 75;
 const uint8_t moon_data[(76*75)/2] = {

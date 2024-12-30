@@ -1,3 +1,5 @@
+#include <Arduino.h> 
+
 const uint32_t uvi_width = 30;
 const uint32_t uvi_height = 30;
 const uint8_t uvi_data[(30*30)/2] = {

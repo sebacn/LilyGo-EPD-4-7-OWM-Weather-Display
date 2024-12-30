@@ -1,3 +1,5 @@
+#include <Arduino.h> 
+
 const uint32_t sunrise_width = 48;
 const uint32_t sunrise_height = 35;
 const uint8_t sunrise_data[(48*35)/2] = {

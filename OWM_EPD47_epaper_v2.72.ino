@@ -1,3 +1,6 @@
+#ifndef BOARD_HAS_PSRAM
+#error "Please enable PSRAM !!!"
+#endif
 #include <Arduino.h>            // In-built
 #include <esp_task_wdt.h>       // In-built
 #include "freertos/FreeRTOS.h"  // In-built
@@ -10,11 +13,14 @@
 
 #include <WiFi.h>               // In-built
 #include <SPI.h>                // In-built
-#include <time.h>               // In-built
+//#include <time.h>               // In-built
+#include <ESP32Time.h>
 
 #include "owm_credentials.h"
 #include "forecast_record.h"
 #include "lang.h"
+#include "config.h"
+
 
 #define SCREEN_WIDTH   EPD_WIDTH
 #define SCREEN_HEIGHT  EPD_HEIGHT
@@ -23,7 +29,7 @@
 String version = "2.7 / 4.7in";  // Programme version, see change log at end
 //################ VARIABLES ##################################################
 
-enum alignment {LEFT, RIGHT, CENTER};
+//enum alignment {LEFT, RIGHT, CENTER};
 #define White         0xFF
 #define LightGrey     0xBB
 #define Grey          0x88
@@ -54,9 +60,9 @@ float humidity_readings[max_readings]    = {0};
 float rain_readings[max_readings]        = {0};
 float snow_readings[max_readings]        = {0};
 
-long SleepDuration   = 60; // Sleep time in minutes, aligned to the nearest minute boundary, so if 30 will always update at 00 or 30 past the hour
-int  WakeupHour      = 8;  // Wakeup after 07:00 to save battery power
-int  SleepHour       = 23; // Sleep  after 23:00 to save battery power
+//long SleepDuration   = 60; // Sleep time in minutes, aligned to the nearest minute boundary, so if 30 will always update at 00 or 30 past the hour
+//int  WakeupHour      = 8;  // Wakeup after 07:00 to save battery power
+//int  SleepHour       = 23; // Sleep  after 23:00 to save battery power
 long StartTime       = 0;
 long SleepTimer      = 0;
 long Delta           = 30; // ESP32 rtc speed compensation, prevents display at xx:59:yy and then xx:00:yy (one minute later) to save power
@@ -75,10 +81,12 @@ long Delta           = 30; // ESP32 rtc speed compensation, prevents display at 
 GFXfont  currentFont;
 uint8_t *framebuffer;
 
+void run_operating_mode();
+
 void BeginSleep() {
   epd_poweroff_all();
   UpdateLocalTime();
-  SleepTimer = (SleepDuration * 60 - ((CurrentMin % SleepDuration) * 60 + CurrentSec)) + Delta; //Some ESP32 have a RTC that is too fast to maintain accurate time, so add an offset
+  SleepTimer = (settings.SleepDuration * 60 - ((CurrentMin % settings.SleepDuration) * 60 + CurrentSec)) + Delta; //Some ESP32 have a RTC that is too fast to maintain accurate time, so add an offset
   esp_sleep_enable_timer_wakeup(SleepTimer * 1000000LL); // in Secs, 1000000LL converts to Secs as unit = 1uSec
   Serial.println("Awake for : " + String((millis() - StartTime) / 1000.0, 3) + "-secs");
   Serial.println("Entering " + String(SleepTimer) + " (secs) of sleep time");
@@ -87,26 +95,36 @@ void BeginSleep() {
 }
 
 boolean SetupTime() {
+  /*
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer, "time.nist.gov"); //(gmtOffset_sec, daylightOffset_sec, ntpServer)
   setenv("TZ", Timezone, 1);  //setenv()adds the "TZ" variable to the environment with a value TimeZone, only used if set to 1, 0 means no change
   tzset(); // Set the TZ environment variable
-  delay(100);
-  return UpdateLocalTime();
+  */
+
+  WiFiClient client;
+
+  datetime_request.api_key = settings.TimezBBKey;
+  datetime_request.make_path(settings.Latitude, settings.Longitude);
+  datetime_request.handler = datetime_handler;
+
+  bool is_time_fetched = http_request_data(client, datetime_request);
+
+  return is_time_fetched && UpdateLocalTime();
 }
 
 uint8_t StartWiFi() {
-  Serial.println("\r\nConnecting to: " + String(ssid));
+  Serial.println("\r\nConnecting to: " + settings.WiFiSSID);
   IPAddress dns(8, 8, 8, 8); // Use Google DNS
   WiFi.disconnect();
   WiFi.mode(WIFI_STA); // switch off AP
   WiFi.setAutoConnect(true);
   WiFi.setAutoReconnect(true);
-  WiFi.begin(ssid, password);
+  WiFi.begin(settings.WiFiSSID.c_str(), settings.WiFiPass.c_str());
   if (WiFi.waitForConnectResult() != WL_CONNECTED) {
     Serial.printf("STA: Failed!\n");
     WiFi.disconnect(false);
     delay(500);
-    WiFi.begin(ssid, password);
+    WiFi.begin(settings.WiFiSSID.c_str(), settings.WiFiPass.c_str());
   }
   if (WiFi.status() == WL_CONNECTED) {
     wifi_signal = WiFi.RSSI(); // Get Wifi Signal strength now, because the WiFi will be turned off to save power!
@@ -135,38 +153,89 @@ void InitialiseSystem() {
 
 void loop() {
   // Nothing to do here
+  if (dnsStarted)
+  {
+    dnsServer.processNextRequest();
+  }
 }
 
 void setup() {
+
   InitialiseSystem();
-  if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
-    bool WakeUp = false;
-    if (WakeupHour > SleepHour)
-      WakeUp = (CurrentHour >= WakeupHour || CurrentHour <= SleepHour);
-    else
-      WakeUp = (CurrentHour >= WakeupHour && CurrentHour <= SleepHour);
-    if (WakeUp) {
-      byte Attempts = 1;
-      bool RxWeather  = false;
-      bool RxForecast = false;
-      WiFiClient client;   // wifi client object
-      while ((RxWeather == false || RxForecast == false) && Attempts <= 2) { // Try up-to 2 time for Weather and Forecast data
-        if (RxWeather  == false) RxWeather  = obtainWeatherData(client, "onecall");
-        if (RxForecast == false) RxForecast = obtainWeatherData(client, "forecast");
-        Attempts++;
-      }
-      Serial.println("Received all weather data...");
-      if (RxWeather && RxForecast) { // Only if received both Weather or Forecast proceed
-        StopWiFi();         // Reduces power consumption
-        epd_poweron();      // Switch on EPD display
-        epd_clear();        // Clear the screen
-        DisplayWeather();   // Display the weather data
-        edp_update();       // Update the display to show the information
-        epd_poweroff_all(); // Switch off all power to EPD
+
+  Serial.begin(115200); 
+
+  dbgPrintln("\n\n=== WEATHER STATION ===");
+  //init_display();
+  wakeup_reason();
+
+  switch (get_mode())
+  {
+    case CONFIG_MODE:
+      dbgPrintln("MODE: Config");
+      run_config_server();
+      break;
+
+    case VALIDATING_MODE:
+      dbgPrintln("MODE: Validating");
+      run_validating_mode();
+      break;
+
+    case OPERATING_MODE:
+      dbgPrintln("MODE: Operating");
+      run_operating_mode();
+      break;
+
+    default:
+      dbgPrintln("MODE: not set. Initializing mode to CONFIG_MODE.");
+      set_mode_and_reboot(CONFIG_MODE);
+      break;
+  }
+
+}
+
+void run_operating_mode() {
+
+    read_config_from_memory();
+    //curr_loc = read_location_from_memory();
+    //wakeup_reason();
+
+    //if (connect_to_wifi()) {
+ 
+    if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
+      bool WakeUp = false;
+      if (settings.WakeupHour > settings.SleepHour)
+        WakeUp = (CurrentHour >= settings.WakeupHour || CurrentHour <= settings.SleepHour);
+      else
+        WakeUp = (CurrentHour >= settings.WakeupHour && CurrentHour <= settings.SleepHour);
+      if (WakeUp) {
+       request_render_weather();
       }
     }
+  
+    BeginSleep();
+}
+
+void request_render_weather()
+{
+  byte Attempts = 1;
+  bool RxWeather  = false;
+  bool RxForecast = false;
+  WiFiClient client;   // wifi client object
+  while ((RxWeather == false || RxForecast == false) && Attempts <= 2) { // Try up-to 2 time for Weather and Forecast data
+    if (RxWeather  == false) RxWeather  = obtainWeatherData(client, "onecall");
+    if (RxForecast == false) RxForecast = obtainWeatherData(client, "forecast");
+    Attempts++;
   }
-  BeginSleep();
+  Serial.println("Received all weather data...");
+  if (RxWeather && RxForecast) { // Only if received both Weather or Forecast proceed
+    StopWiFi();         // Reduces power consumption
+    epd_poweron();      // Switch on EPD display
+    epd_clear();        // Clear the screen
+    DisplayWeather();   // Display the weather data
+    edp_update();       // Update the display to show the information
+    epd_poweroff_all(); // Switch off all power to EPD
+  }
 }
 
 void Convert_Readings_to_Imperial() { // Only the first 3-hours are used
@@ -177,7 +246,7 @@ void Convert_Readings_to_Imperial() { // Only the first 3-hours are used
 
 bool DecodeWeather(WiFiClient& json, String Type) {
   Serial.print(F("\nCreating object...and "));
-  DynamicJsonDocument doc(64 * 1024);                      // allocate the JsonDocument
+  JsonDocument doc; //(64 * 1024);                      // allocate the JsonDocument
   DeserializationError error = deserializeJson(doc, json); // Deserialize the JSON document
   if (error) {                                             // Test if parsing succeeds.
     Serial.print(F("deserializeJson() failed: "));
@@ -223,7 +292,7 @@ bool DecodeWeather(WiFiClient& json, String Type) {
       WxForecast[r].High              = list[r]["main"]["temp_max"].as<float>();   Serial.println("THig: " + String(WxForecast[r].High));
       WxForecast[r].Pressure          = list[r]["main"]["pressure"].as<float>();   Serial.println("Pres: " + String(WxForecast[r].Pressure));
       WxForecast[r].Humidity          = list[r]["main"]["humidity"].as<float>();   Serial.println("Humi: " + String(WxForecast[r].Humidity));
-      WxForecast[r].Icon              = list[r]["weather"][0]["icon"].as<char*>(); Serial.println("Icon: " + String(WxForecast[r].Icon));
+      WxForecast[r].Icon              = list[r]["weather"][0]["icon"].as<const char*>(); Serial.println("Icon: " + String(WxForecast[r].Icon));
       WxForecast[r].Rainfall          = list[r]["rain"]["3h"].as<float>();         Serial.println("Rain: " + String(WxForecast[r].Rainfall));
       WxForecast[r].Snowfall          = list[r]["snow"]["3h"].as<float>();         Serial.println("Snow: " + String(WxForecast[r].Snowfall));
       if (r < 8) { // Check next 3 x 8 Hours = 1 day
@@ -239,7 +308,7 @@ bool DecodeWeather(WiFiClient& json, String Type) {
     if (pressure_trend < 0)  WxConditions[0].Trend = "-";
     if (pressure_trend == 0) WxConditions[0].Trend = "0";
 
-    if (Units == "I") Convert_Readings_to_Imperial();
+    if (settings.Units == "I") Convert_Readings_to_Imperial();
   }
   return true;
 }
@@ -249,7 +318,7 @@ String ConvertUnixTime(int unix_time) {
   time_t tm = unix_time;
   struct tm *now_tm = localtime(&tm);
   char output[40];
-  if (Units == "M") {
+  if (settings.Units == "M") {
     strftime(output, sizeof(output), "%H:%M %d/%m/%y", now_tm);
   }
   else {
@@ -259,13 +328,13 @@ String ConvertUnixTime(int unix_time) {
 }
 //#########################################################################################
 bool obtainWeatherData(WiFiClient & client, const String & RequestType) {
-  const String units = (Units == "M" ? "metric" : "imperial");
+  const String units = (settings.Units == "M" ? "metric" : "imperial");
   client.stop(); // close connection before sending a new request
   HTTPClient http;
   //api.openweathermap.org/data/2.5/RequestType?lat={lat}&lon={lon}&appid={API key}
-  String uri = "/data/2.5/" + RequestType + "?lat=" + Latitude + "&lon=" + Longitude + "&appid=" + apikey + "&mode=json&units=" + units + "&lang=" + Language;
+  String uri = "/data/2.5/" + RequestType + "?lat=" + settings.Latitude + "&lon=" + settings.Longitude + "&appid=" + settings.OwmApikey + "&mode=json&units=" + units + "&lang=" + Language;
   if (RequestType == "onecall") uri += "&exclude=minutely,hourly,alerts,daily";
-  http.begin(client, server, 80, uri); //http.begin(uri,test_root_ca); //HTTPS example connection
+  http.begin(client, "api.openweathermap.org", 80, uri); //http.begin(uri,test_root_ca); //HTTPS example connection
   int httpCode = http.GET();
   if (httpCode == HTTP_CODE_OK) {
     if (!DecodeWeather(http.getStream(), RequestType)) return false;
@@ -332,7 +401,7 @@ void DisplayWeather() {                          // 4.7" e-paper display is 960x
 
 void DisplayGeneralInfoSection() {
   setFont(OpenSans10B);
-  drawString(5, 2, City, LEFT);
+  drawString(5, 2, settings.City, LEFT);
   setFont(OpenSans8B);
   drawString(500, 2, Date_str + "  @   " + Time_str, LEFT);
 }
@@ -381,7 +450,7 @@ void DisplayDisplayWindSection(int x, int y, float angle, float windspeed, int C
   setFont(OpenSans24B);
   drawString(x + 3, y - 18, String(windspeed, 1), CENTER);
   setFont(OpenSans12B);
-  drawString(x, y + 25, (Units == "M" ? "m/s" : "mph"), CENTER);
+  drawString(x, y + 25, (settings.Units == "M" ? "m/s" : "mph"), CENTER);
 }
 
 String WindDegToOrdinalDirection(float winddirection) {
@@ -432,7 +501,7 @@ void DisplayForecastTextSection(int x, int y) {
     p++;
     charCount++;
   }
-  if (WxForecast[0].Rainfall > 0) Wx_Description += " (" + String(WxForecast[0].Rainfall, 1) + String((Units == "M" ? "mm" : "in")) + ")";
+  if (WxForecast[0].Rainfall > 0) Wx_Description += " (" + String(WxForecast[0].Rainfall, 1) + String((settings.Units == "M" ? "mm" : "in")) + ")";
   String Line1 = Wx_Description.substring(0, Wx_Description.indexOf("~"));
   String Line2 = Wx_Description.substring(Wx_Description.indexOf("~") + 1);
   drawString(x + 30, y + 5, TitleCase(Line1), LEFT);
@@ -474,6 +543,9 @@ double NormalizedMoonPhase(int d, int m, int y) {
 }
 
 void DisplayAstronomySection(int x, int y) {
+
+  String Hemisphere = atof(settings.Latitude.c_str()) > 0? "north" : "south";
+
   setFont(OpenSans10B);
   time_t now = time(NULL);
   struct tm * now_utc  = gmtime(&now);
@@ -561,9 +633,9 @@ void DisplayForecastSection(int x, int y) {
 void DisplayGraphSection(int x, int y) {
   int r = 0;
   do { // Pre-load temporary arrays with with data - because C parses by reference and remember that[1] has already been converted to I units
-    if (Units == "I") pressure_readings[r] = WxForecast[r].Pressure * 0.02953;   else pressure_readings[r] = WxForecast[r].Pressure;
-    if (Units == "I") rain_readings[r]     = WxForecast[r].Rainfall * 0.0393701; else rain_readings[r]     = WxForecast[r].Rainfall;
-    if (Units == "I") snow_readings[r]     = WxForecast[r].Snowfall * 0.0393701; else snow_readings[r]     = WxForecast[r].Snowfall;
+    if (settings.Units == "I") pressure_readings[r] = WxForecast[r].Pressure * 0.02953;   else pressure_readings[r] = WxForecast[r].Pressure;
+    if (settings.Units == "I") rain_readings[r]     = WxForecast[r].Rainfall * 0.0393701; else rain_readings[r]     = WxForecast[r].Rainfall;
+    if (settings.Units == "I") snow_readings[r]     = WxForecast[r].Snowfall * 0.0393701; else snow_readings[r]     = WxForecast[r].Snowfall;
     temperature_readings[r]                = WxForecast[r].Temperature;
     humidity_readings[r]                   = WxForecast[r].Humidity;
     r++;
@@ -573,13 +645,13 @@ void DisplayGraphSection(int x, int y) {
   int gy = (SCREEN_HEIGHT - gheight - 30);
   int gap = gwidth + gx;
   // (x,y,width,height,MinValue, MaxValue, Title, Data Array, AutoScale, ChartMode)
-  DrawGraph(gx + 0 * gap, gy, gwidth, gheight, 900, 1050, Units == "M" ? TXT_PRESSURE_HPA : TXT_PRESSURE_IN, pressure_readings, max_readings, autoscale_on, barchart_off);
-  DrawGraph(gx + 1 * gap, gy, gwidth, gheight, 10, 30,    Units == "M" ? TXT_TEMPERATURE_C : TXT_TEMPERATURE_F, temperature_readings, max_readings, autoscale_on, barchart_off);
+  DrawGraph(gx + 0 * gap, gy, gwidth, gheight, 900, 1050, settings.Units == "M" ? TXT_PRESSURE_HPA : TXT_PRESSURE_IN, pressure_readings, max_readings, autoscale_on, barchart_off);
+  DrawGraph(gx + 1 * gap, gy, gwidth, gheight, 10, 30,    settings.Units == "M" ? TXT_TEMPERATURE_C : TXT_TEMPERATURE_F, temperature_readings, max_readings, autoscale_on, barchart_off);
   DrawGraph(gx + 2 * gap, gy, gwidth, gheight, 0, 100,   TXT_HUMIDITY_PERCENT, humidity_readings, max_readings, autoscale_off, barchart_off);
   if (SumOfPrecip(rain_readings, max_readings) >= SumOfPrecip(snow_readings, max_readings))
-    DrawGraph(gx + 3 * gap + 5, gy, gwidth, gheight, 0, 30, Units == "M" ? TXT_RAINFALL_MM : TXT_RAINFALL_IN, rain_readings, max_readings, autoscale_on, barchart_on);
+    DrawGraph(gx + 3 * gap + 5, gy, gwidth, gheight, 0, 30, settings.Units == "M" ? TXT_RAINFALL_MM : TXT_RAINFALL_IN, rain_readings, max_readings, autoscale_on, barchart_on);
   else
-    DrawGraph(gx + 3 * gap + 5, gy, gwidth, gheight, 0, 30, Units == "M" ? TXT_SNOWFALL_MM : TXT_SNOWFALL_IN, snow_readings, max_readings, autoscale_on, barchart_on);
+    DrawGraph(gx + 3 * gap + 5, gy, gwidth, gheight, 0, 30, settings.Units == "M" ? TXT_SNOWFALL_MM : TXT_SNOWFALL_IN, snow_readings, max_readings, autoscale_on, barchart_on);
 }
 
 void DisplayConditionsSection(int x, int y, String IconName, bool IconSize) {
@@ -618,7 +690,7 @@ void DrawSegment(int x, int y, int o1, int o2, int o3, int o4, int o11, int o12,
 }
 
 void DrawPressureAndTrend(int x, int y, float pressure, String slope) {
-  drawString(x + 25, y - 10, String(pressure, (Units == "M" ? 0 : 1)) + (Units == "M" ? "hPa" : "in"), LEFT);
+  drawString(x + 25, y - 10, String(pressure, (settings.Units == "M" ? 0 : 1)) + (settings.Units == "M" ? "hPa" : "in"), LEFT);
   if      (slope == "+") {
     DrawSegment(x, y, 0, 0, 8, -8, 8, -8, 16, 0);
     DrawSegment(x - 1, y, 0, 0, 8, -8, 8, -8, 16, 0);
@@ -654,18 +726,26 @@ void DrawRSSI(int x, int y, int rssi) {
 }
 
 boolean UpdateLocalTime() {
-  struct tm timeinfo;
+  //struct tm timeinfo;
   char   time_output[30], day_output[30], update_time[30];
+  /*
   while (!getLocalTime(&timeinfo, 5000)) { // Wait for 5-sec for time to synchronise
     Serial.println("Failed to obtain time");
     return false;
   }
+  */
+  ESP32Time rtc(0);
+
+  rtc.setTime(datetime_request.response.dt);
+
+  struct tm timeinfo = rtc.getTimeStruct();
+
   CurrentHour = timeinfo.tm_hour;
   CurrentMin  = timeinfo.tm_min;
   CurrentSec  = timeinfo.tm_sec;
   //See http://www.cplusplus.com/reference/ctime/strftime/
   Serial.println(&timeinfo, "%a %b %d %Y   %H:%M:%S");      // Displays: Saturday, June 24 2017 14:05:49
-  if (Units == "M") {
+  if (settings.Units == "M") {
     sprintf(day_output, "%s, %02u %s %04u", weekday_D[timeinfo.tm_wday], timeinfo.tm_mday, month_M[timeinfo.tm_mon], (timeinfo.tm_year) + 1900);
     strftime(update_time, sizeof(update_time), "%H:%M:%S", &timeinfo);  // Creates: '@ 14:05:49'   and change from 30 to 8 <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
     sprintf(time_output, "%s", update_time);

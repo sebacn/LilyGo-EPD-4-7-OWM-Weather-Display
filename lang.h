@@ -1,4 +1,5 @@
 #define FONT(x) x##_tf
+#include <Arduino.h> 
 
 //Temperature - Humidity - Forecast
 const String TXT_FORECAST_VALUES  = "3-Day Forecast Values";
