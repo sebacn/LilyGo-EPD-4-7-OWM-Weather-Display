@@ -4,6 +4,7 @@
 
 #include <time.h>
 #include "i18n.h"
+#include <Arduino.h>
 
 
 String capitalize(String str) {

@@ -12,12 +12,13 @@
 #include <ArduinoJson.h> 
 #include <HTTPClient.h>
 #include "units.h"
+#include "aqi_metric.h"
 
-#include "opensans8b.h"
-#include "opensans10b.h"
-#include "opensans12b.h"
-#include "opensans18b.h"
-#include "opensans24b.h"
+#include "fonts/opensans8b.h"
+#include "fonts/opensans10b.h"
+#include "fonts/opensans12b.h"
+#include "fonts/opensans18b.h"
+#include "fonts/opensans24b.h"
 
 #define MEMORY_ID "mem"
 
@@ -44,9 +45,9 @@ struct WeatherRequest weather_request;
 
 
 int get_mode();
-void drawString(int x, int y, String text, alignment align);
+extern int drawString(int x, int y, String text, alignment align);
 uint8_t StartWiFi();
-JsonDocument deserialize(WiFiClient& resp_stream, const int size, bool is_embeded=false);
+JsonDocument deserialize(WiFiClient& resp_stream, bool is_embeded=false);
 void set_mode(int mode);
 void set_mode_and_reboot(int mode);
 void edp_update();
@@ -55,6 +56,7 @@ boolean SetupTime();
 void request_render_weather();
 void BeginSleep();
 boolean UpdateLocalTime();
+extern bool DecodeWeather(WiFiClient& json, String Type);
 
 template<typename T>
 T value_or_default(JsonObject jobj, String key, T default_value) {
@@ -99,7 +101,7 @@ void update_datetime(TimeZoneDbResponse& datetime_resp, JsonObject& jobj) {
     datetime_resp.dst = jobj["dst"].as<int>();
     datetime_resp.formatted = jobj["formatted"].as<String>();
 }
-
+/*
 void update_current_weather(WeatherResponseHourly& hourly, JsonObject& root) {
     hourly.date_ts = root["current"]["dt"].as<int>();
     hourly.sunr_ts = root["current"]["sunrise"].as<int>();
@@ -140,10 +142,10 @@ void update_percip_forecast(WeatherResponseRainHourly& percip, JsonObject& root,
     percip.feel_t = kelv2cels1(root["hourly"][hour_offset]["feels_like"].as<float>());
     percip.icon = String(root["hourly"][hour_offset]["weather"][0]["icon"].as<String>()).substring(0, 2); //char*
 }
-
+*/
 bool location_handler(WiFiClient& resp_stream, Request request) {
-    const int json_size = 20 * 1024;
-    JsonDocument doc = deserialize(resp_stream, json_size, true);
+    //const int json_size = 20 * 1024;
+    JsonDocument doc = deserialize(resp_stream, true);
     JsonObject api_resp = doc.as<JsonObject>();
 
     if (api_resp.isNull()) {
@@ -158,8 +160,8 @@ bool location_handler(WiFiClient& resp_stream, Request request) {
 }
 
 bool datetime_handler(WiFiClient& resp_stream, Request request) {
-    const int json_size = 10 * 1024;
-    JsonDocument doc = deserialize(resp_stream, json_size, true);
+    //const int json_size = 10 * 1024;
+    JsonDocument doc = deserialize(resp_stream, true);
     JsonObject api_resp = doc.as<JsonObject>();
 
     if (api_resp.isNull()) {
@@ -172,9 +174,9 @@ bool datetime_handler(WiFiClient& resp_stream, Request request) {
     return true;
 }
 
-JsonDocument deserialize(WiFiClient& resp_stream, const int size, bool is_embeded) {
+JsonDocument deserialize(WiFiClient& resp_stream, bool is_embeded) {
     // https://arduinojson.org/v6/assistant/
-    Serial.print("\nDeserializing json, size:" + String(size) + " bytes...");
+    Serial.print("\nDeserializing json, size: x bytes...");
     JsonDocument doc;//(size);
     DeserializationError error;
     
@@ -200,6 +202,21 @@ JsonDocument deserialize(WiFiClient& resp_stream, const int size, bool is_embede
 }
 
 bool weather_handler(WiFiClient& resp_stream, Request request) {
+
+    JsonDocument doc = deserialize(resp_stream);
+    JsonObject api_resp = doc.as<JsonObject>();
+
+    if (api_resp.isNull()) {
+        return false;
+    }
+
+    return true;
+}
+
+/*
+bool weather_handler(WiFiClient& resp_stream, Request request) {
+
+
     const int json_size = 35 * 1024;
     JsonDocument doc = deserialize(resp_stream, json_size);
     JsonObject api_resp = doc.as<JsonObject>();
@@ -224,9 +241,10 @@ bool weather_handler(WiFiClient& resp_stream, Request request) {
         update_percip_forecast(weather_request.rain[hour], api_resp, offset);
         weather_request.rain[hour].print();
     }
+    
     return true;
 }
-
+*/
 bool http_request_data(WiFiClient& client, Request request, unsigned int retry=3) {
     
     bool ret_val = false;
@@ -253,8 +271,49 @@ bool http_request_data(WiFiClient& client, Request request, unsigned int retry=3
     }
     return ret_val;
 }
-
 /*
+bool http_request_dataV2(Request request, unsigned int retry=3) {
+    
+    bool ret_val = false;
+    WiFiClient *transport = nullptr;
+
+    if (request.UseHTTPS())
+    {
+        auto c = new WiFiClientSecure();
+        c->setCACert(request.ROOT_CA);
+        transport = c;
+    }
+    else 
+    { 
+        transport = new WiFiClient{}; 
+    }
+
+    request.make_path();
+
+    while (!ret_val && retry--) {
+        ret_val = true;
+        transport->stop();
+        HTTPClient http;
+        Serial.printf("\nHTTP (HTTPS: %s) connecting to %s%s [retry left: %s]", String(request.UseHTTPS()).c_str(), request.server.c_str(), request.path.c_str(), String(retry).c_str());
+        http.begin(*transport, request.server, request.UseHTTPS()? 443 : 80, request.path);
+        int http_code = http.GET();
+        
+        if(http_code == HTTP_CODE_OK) {
+            dbgPrintln("\nHTTP connection established");
+            if (!request.handler(http.getStream(), request)) {
+                ret_val = false;
+            }
+        } else {
+            Serial.printf("\nHTTP connection failed %s, error: %s \n\n", String(http_code).c_str(), http.errorToString(http_code).c_str());
+            ret_val = false;
+        }
+        transport->stop();
+        http.end();
+    }
+    return ret_val;
+}
+
+
 void disconnect_from_wifi() {
     WiFi.disconnect();
     WiFi.mode(WIFI_OFF);
@@ -492,7 +551,7 @@ void run_config_server() {
     wm.addParameter(&parmSleepHour);       
 
     //wm.setTimeout(120);
-    wm.setConfigPortalTimeout(60*5); //5 min
+    wm.setConfigPortalTimeout(20*1); //5 min
     wm.setSaveConfigCallback(saveConfigCallback);
 
     bool res = wm.startConfigPortal(network.c_str(), pass.c_str());
@@ -581,8 +640,7 @@ void run_validating_mode() {
     configOk = false;
     
     if (StartWiFi() == WL_CONNECTED) {
-
-        location_request.handler = location_handler;
+        
         WiFiClient client;
         //bool is_location_fetched = false;
 
@@ -638,6 +696,7 @@ void run_validating_mode() {
         
         dbgPrintln("Validate: get locations by names");
         
+        location_request.handler = location_handler;
         location_request.name = settings.City;
         location_request.api_key = settings.PositionStackKey;
         location_request.make_path();
@@ -672,7 +731,7 @@ void run_validating_mode() {
             datetime_request.handler = datetime_handler;
 
             weather_request.api_key = settings.OwmApikey;
-            weather_request.make_path(settings.Latitude, settings.Longitude);
+            weather_request.make_path(settings.Latitude, settings.Longitude, settings.Units);
             weather_request.handler = weather_handler;
 
             bool is_time_fetched = http_request_data(client, datetime_request);

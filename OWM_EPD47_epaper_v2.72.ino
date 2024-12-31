@@ -68,20 +68,29 @@ long SleepTimer      = 0;
 long Delta           = 30; // ESP32 rtc speed compensation, prevents display at xx:59:yy and then xx:00:yy (one minute later) to save power
 
 //fonts
-#include "opensans8b.h"
-#include "opensans10b.h"
-#include "opensans12b.h"
-#include "opensans18b.h"
-#include "opensans24b.h"
-#include "moon.h"
-#include "sunrise.h"
-#include "sunset.h"
-#include "uvi.h"
+#include "fonts/opensans5cb_special2.h"
+#include "fonts/opensans6b.h"
+#include "fonts/opensans8b.h"
+#include "fonts/opensans10b.h"
+#include "fonts/opensans12b.h"
+#include "fonts/opensans18b.h"
+#include "fonts/opensans24b.h"
+#include "imgs/moon.h"
+#include "imgs/sunrise.h"
+#include "imgs/sunset.h"
+#include "imgs/uvi.h"
+#include "imgs/Gauge0.h"
+#include "imgs/Gauge1.h"
+#include "imgs/Gauge2.h"
+#include "imgs/Gauge3.h"
+#include "imgs/Gauge4.h"
+#include "imgs/AirTree.h"
 
 GFXfont  currentFont;
 uint8_t *framebuffer;
 
 void run_operating_mode();
+void DisplayAirQualitySection(int x, int y);
 
 void BeginSleep() {
   epd_poweroff_all();
@@ -221,14 +230,25 @@ void request_render_weather()
   byte Attempts = 1;
   bool RxWeather  = false;
   bool RxForecast = false;
-  WiFiClient client;   // wifi client object
+  bool RxAqidata = false;
+  WiFiClientSecure client;   // wifi client object
   while ((RxWeather == false || RxForecast == false) && Attempts <= 2) { // Try up-to 2 time for Weather and Forecast data
     if (RxWeather  == false) RxWeather  = obtainWeatherData(client, "onecall");
     if (RxForecast == false) RxForecast = obtainWeatherData(client, "forecast");
+    if (RxAqidata == false) RxAqidata = obtainWeatherData(client, "air_pollution");
     Attempts++;
   }
+/*
+  dbgPrintln("Request air_pollution YYYYYYYYYY");
+  weather_request.api_key = settings.OwmApikey;
+  weather_request.handler = weather_handler;  
+  weather_request.ROOT_CA = OWM_ROOT_CA;
+  weather_request.apiCall = ApiCall::AQI;
+  weather_request.make_path(settings.Latitude, settings.Longitude, settings.Units);
+  bool RxAqidata = http_request_dataV2(weather_request);
+*/
   Serial.println("Received all weather data...");
-  if (RxWeather && RxForecast) { // Only if received both Weather or Forecast proceed
+  if (RxWeather && RxForecast && RxAqidata) { // Only if received both Weather or Forecast proceed
     StopWiFi();         // Reduces power consumption
     epd_poweron();      // Switch on EPD display
     epd_clear();        // Clear the screen
@@ -279,7 +299,7 @@ bool DecodeWeather(WiFiClient& json, String Type) {
     String Icon        = current_weather["icon"];                                  // "01n"
     WxConditions[0].Forecast0   = Description;                                     Serial.println("Fore: " + String(WxConditions[0].Forecast0));
     WxConditions[0].Icon        = Icon;                                            Serial.println("Icon: " + String(WxConditions[0].Icon));
-  }
+  }  
   if (Type == "forecast") {
     //Serial.println(json);
     Serial.print(F("\nReceiving Forecast period - ")); //------------------------------------------------
@@ -310,6 +330,28 @@ bool DecodeWeather(WiFiClient& json, String Type) {
 
     if (settings.Units == "I") Convert_Readings_to_Imperial();
   }
+  if (Type == "air_pollution") {
+
+        //auto& obj = WxAirQ;
+
+      JsonArray list = root["list"];
+
+      auto en = list[0];
+
+      WxAirQ.Dt  = en["dt"];
+      WxAirQ.AQI = en["main"]["aqi"];
+
+      auto c = en["components"].as<JsonObject>();
+
+      WxAirQ.CO    = c["co"];
+      WxAirQ.NO    = c["no"];
+      WxAirQ.NO2   = c["no2"];
+      WxAirQ.O3    = c["o3"];
+      WxAirQ.SO2   = c["so2"];
+      WxAirQ.PM2_5 = c["pm2_5"];
+      WxAirQ.PM10  = c["pm10"];
+      WxAirQ.NH3   = c["nh3"];
+  }
   return true;
 }
 //#########################################################################################
@@ -327,14 +369,15 @@ String ConvertUnixTime(int unix_time) {
   return output;
 }
 //#########################################################################################
-bool obtainWeatherData(WiFiClient & client, const String & RequestType) {
+bool obtainWeatherData(WiFiClientSecure & client, const String & RequestType) {
   const String units = (settings.Units == "M" ? "metric" : "imperial");
   client.stop(); // close connection before sending a new request
   HTTPClient http;
   //api.openweathermap.org/data/2.5/RequestType?lat={lat}&lon={lon}&appid={API key}
   String uri = "/data/2.5/" + RequestType + "?lat=" + settings.Latitude + "&lon=" + settings.Longitude + "&appid=" + settings.OwmApikey + "&mode=json&units=" + units + "&lang=" + Language;
   if (RequestType == "onecall") uri += "&exclude=minutely,hourly,alerts,daily";
-  http.begin(client, "api.openweathermap.org", 80, uri); //http.begin(uri,test_root_ca); //HTTPS example connection
+  client.setCACert(OWM_ROOT_CA);
+  http.begin(client, "api.openweathermap.org", 443, uri); //http.begin(uri,test_root_ca); //HTTPS example connection
   int httpCode = http.GET();
   if (httpCode == HTTP_CODE_OK) {
     if (!DecodeWeather(http.getStream(), RequestType)) return false;
@@ -389,32 +432,34 @@ String TitleCase(String text) {
 }
 
 void DisplayWeather() {                          // 4.7" e-paper display is 960x540 resolution
-  DisplayStatusSection(600, 20, wifi_signal);    // Wi-Fi signal strength and Battery voltage
+  DisplayStatusSection(525, 25, wifi_signal);    // Wi-Fi signal strength and Battery voltage
   DisplayGeneralInfoSection();                   // Top line of the display
-  DisplayDisplayWindSection(137, 150, WxConditions[0].Winddir, WxConditions[0].Windspeed, 100);
+  DisplayDisplayWindSection(137, 155, WxConditions[0].Winddir, WxConditions[0].Windspeed, 100);
   DisplayAstronomySection(5, 252);               // Astronomy section Sun rise/set, Moon phase and Moon icon
   DisplayMainWeatherSection(320, 110);           // Centre section of display for Location, temperature, Weather report, current Wx Symbol
-  DisplayWeatherIcon(835, 140);                  // Display weather icon scale = Large;
+  DisplayWeatherIcon(830, 120);                  // Display weather icon scale = Large;
   DisplayForecastSection(285, 220);              // 3hr forecast boxes
   DisplayGraphSection(320, 220);                 // Graphs of pressure, temperature, humidity and rain or snowfall
 }
 
 void DisplayGeneralInfoSection() {
-  setFont(OpenSans10B);
-  drawString(5, 2, settings.City, LEFT);
-  setFont(OpenSans8B);
-  drawString(500, 2, Date_str + "  @   " + Time_str, LEFT);
+  setFont(OpenSans18B);
+  drawString(5, 3, settings.City, LEFT);
+  setFont(OpenSans12B);
+  drawString(350, 5, Date_str + " @ " + Time_str, LEFT);
 }
 
 void DisplayWeatherIcon(int x, int y) {
   DisplayConditionsSection(x, y, WxConditions[0].Icon, LargeIcon);
+  DisplayForecastTextSection(x-100, y+75);
 }
 
 void DisplayMainWeatherSection(int x, int y) {
   setFont(OpenSans8B);
-  DisplayTempHumiPressSection(x, y - 60);
-  DisplayForecastTextSection(x - 55, y + 45);
-  DisplayVisiCCoverUVISection(x - 10, y + 95);
+  DisplayTempHumiPressSection(x+5, y - 50);
+  //DisplayForecastTextSection(x - 55, y + 45);
+  DisplayVisiCCoverUVISection(x - 18, y + 45);
+  DisplayAirQualitySection(x - 25, y + 85);
 }
 
 void DisplayDisplayWindSection(int x, int y, float angle, float windspeed, int Cradius) {
@@ -478,12 +523,12 @@ void DisplayTempHumiPressSection(int x, int y) {
   drawString(x - 30, y, String(WxConditions[0].Temperature, 1) + "°   " + String(WxConditions[0].Humidity, 0) + "%", LEFT);
   setFont(OpenSans12B);
   DrawPressureAndTrend(x + 195, y + 15, WxConditions[0].Pressure, WxConditions[0].Trend);
-  int Yoffset = 42;
+  int Yoffset = 47;
   if (WxConditions[0].Windspeed > 0) {
     drawString(x - 30, y + Yoffset, String(WxConditions[0].FeelsLike, 1) + "° FL", LEFT);   // Show FeelsLike temperature if windspeed > 0
-    Yoffset += 30;
+    //Yoffset += 30;
   }
-  drawString(x - 30, y + Yoffset, String(WxConditions[0].High, 0) + "° | " + String(WxConditions[0].Low, 0) + "° Hi/Lo", LEFT); // Show forecast high and Low
+  drawString(x + 75, y + Yoffset - 7, String(WxConditions[0].High, 0) + "° | " + String(WxConditions[0].Low, 0) + "° Hi/Lo", LEFT); // Show forecast high and Low
 }
 
 void DisplayForecastTextSection(int x, int y) {
@@ -706,9 +751,9 @@ void DrawPressureAndTrend(int x, int y, float pressure, String slope) {
 }
 
 void DisplayStatusSection(int x, int y, int rssi) {
-  setFont(OpenSans8B);
-  DrawRSSI(x + 305, y + 15, rssi);
-  DrawBattery(x + 150, y);
+  setFont(OpenSans12B);
+  DrawRSSI(x + 385, y + 2, rssi);
+  DrawBattery(x + 180, y);
 }
 
 void DrawRSSI(int x, int y, int rssi) {
@@ -778,7 +823,7 @@ void DrawBattery(int x, int y) {
     drawRect(x + 25, y - 14, 40, 15, Black);
     fillRect(x + 65, y - 10, 4, 7, Black);
     fillRect(x + 27, y - 12, 36 * percentage / 100.0, 11, Black);
-    drawString(x + 85, y - 14, String(percentage) + "%  " + String(voltage, 1) + "v", LEFT);
+    drawString(x + 80, y - 17, String(percentage) + "% " + String(voltage, 1) + "v", LEFT);
   }
 }
 
@@ -1083,7 +1128,7 @@ void DrawGraph(int x_pos, int y_pos, int gwidth, int gheight, float Y1Min, float
   }
 }
 
-void drawString(int x, int y, String text, alignment align) {
+int drawString(int x, int y, String text, alignment align) {
   char * data  = const_cast<char*>(text.c_str());
   int  x1, y1; //the bounds of x,y and w and h of the variable 'text' in pixels.
   int w, h;
@@ -1093,6 +1138,7 @@ void drawString(int x, int y, String text, alignment align) {
   if (align == CENTER) x = x - w / 2;
   int cursor_y = y + h;
   write_string(&currentFont, data, &x, &cursor_y, framebuffer);
+  return w;
 }
 
 void fillCircle(int x, int y, int r, uint8_t color) {
@@ -1142,3 +1188,73 @@ void edp_update() {
 /*
    1071 lines of code 03-03-2021
 */
+
+void drawGrayscaleImage(Rect_t const& area, uint8_t const * data) {
+  // epd_draw_grayscale_image(area, (uint8_t *) data);
+
+  // unlike the original code, this method does not flush the image the screen,
+  // but only copies it to the framebuffer
+  epd_copy_to_framebuffer(area, (uint8_t *)data, framebuffer);
+}
+
+void DrawGauge(int x, int y, AQIndicator ind)
+{
+    IndicatorSpec const& spec = Indicators[(uint8_t)ind];
+    auto val_ptr              = ((uint8_t const *)&WxAirQ) + spec.offset;
+    float val                 = *(float const *)(val_ptr);
+
+    int level = 0;
+    while (level < aiq_scale_levels && val >= spec.levels[level])
+        level++;
+
+    switch (level)
+    {
+        case 0: drawGrayscaleImage(ImgGaugeFrame0_info(x, y)); break;
+        case 1: drawGrayscaleImage(ImgGaugeFrame1_info(x, y)); break;
+        case 2: drawGrayscaleImage(ImgGaugeFrame2_info(x, y)); break;
+        case 3: drawGrayscaleImage(ImgGaugeFrame3_info(x, y)); break;
+        case 4: drawGrayscaleImage(ImgGaugeFrame4_info(x, y)); break;
+        default: break;
+    }
+
+    constexpr auto gauge_center_offset_x = ImgGaugeFrame0_width / 2;
+    constexpr auto gauge_txt_baseline_y  = 17 + 1;
+    constexpr auto txt_subscript_shift_y = 8;
+
+    setFont(OpenSans6B);
+    int dw = drawString(x + gauge_center_offset_x, y + gauge_txt_baseline_y, spec.main, CENTER);
+    if (spec.sub)
+    {
+        setFont(OpenSans5CB_Special2);
+        drawString(x + gauge_center_offset_x + dw / 2, y + gauge_txt_baseline_y + txt_subscript_shift_y, spec.sub,
+                   LEFT);
+    }
+
+    setFont(OpenSans8B);
+    // all other indicators range < 1000, CO reaches 20 000, so scale it so it fits in 3 digits
+    if (ind == AQIndicator::CO) val /= 100.0;
+    int32_t disp_val = round(val);
+    if (disp_val > 999) disp_val = 999;
+    drawString(x + ImgGaugeFrame0_width + 3, y + 23 - 12, String(disp_val), LEFT);
+}
+
+void DisplayAQI(int x, int y)
+{
+    drawGrayscaleImage(ImgAIQ_info(x, y));
+    setFont(OpenSans8B);
+    // OWM's api uses 1=best...5=worst and we use x/5 scale, so we need to reverse the output
+    int q = 6 - WxAirQ.AQI;
+    drawString(x + ImgAIQ_width + 3, y + 10, String(q) + "/5", LEFT);
+}
+
+void DisplayAirQualitySection(int x, int y)
+{
+    constexpr auto aiq_w   = 74;
+    constexpr auto gauge_w = 84;
+
+    DisplayAQI(x, y + 1);
+
+    DrawGauge(x + +aiq_w, y, AQIComponents[0]);
+    DrawGauge(x + aiq_w + gauge_w, y, AQIComponents[1]);
+    DrawGauge(x + aiq_w + 2 * gauge_w, y, AQIComponents[2]);
+}
