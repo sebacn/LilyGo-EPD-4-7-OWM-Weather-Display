@@ -218,19 +218,31 @@ void run_operating_mode() {
       else
         WakeUp = (CurrentHour >= settings.WakeupHour && CurrentHour <= settings.SleepHour);
       if (WakeUp) {
-       request_render_weather();
+       request_render_weather(false);
       }
     }
   
     BeginSleep();
 }
 
-void request_render_weather()
+void request_render_weather(bool _clearDisplay)
 {
   byte Attempts = 1;
   bool RxWeather  = false;
   bool RxForecast = false;
   bool RxAqidata = false;
+
+  dbgPrintln("Request_render_weather");
+
+  if (_clearDisplay)
+  {
+    dbgPrintln("Clear Display");
+    epd_poweron();      // Switch on EPD display
+    epd_clear();        // Clear the screen 
+    epd_poweroff_all();
+    memset(framebuffer, 0xFF, EPD_WIDTH * EPD_HEIGHT / 2);
+  }    
+
   WiFiClientSecure client;   // wifi client object
   while ((RxWeather == false || RxForecast == false) && Attempts <= 2) { // Try up-to 2 time for Weather and Forecast data
     if (RxWeather  == false) RxWeather  = obtainWeatherData(client, "onecall");
@@ -238,15 +250,6 @@ void request_render_weather()
     if (RxAqidata == false) RxAqidata = obtainWeatherData(client, "air_pollution");
     Attempts++;
   }
-/*
-  dbgPrintln("Request air_pollution YYYYYYYYYY");
-  weather_request.api_key = settings.OwmApikey;
-  weather_request.handler = weather_handler;  
-  weather_request.ROOT_CA = OWM_ROOT_CA;
-  weather_request.apiCall = ApiCall::AQI;
-  weather_request.make_path(settings.Latitude, settings.Longitude, settings.Units);
-  bool RxAqidata = http_request_dataV2(weather_request);
-*/
   Serial.println("Received all weather data...");
   if (RxWeather && RxForecast && RxAqidata) { // Only if received both Weather or Forecast proceed
     StopWiFi();         // Reduces power consumption

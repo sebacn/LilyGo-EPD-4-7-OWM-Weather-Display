@@ -53,7 +53,7 @@ void set_mode_and_reboot(int mode);
 void edp_update();
 void setFont(GFXfont const & font);
 boolean SetupTime();
-void request_render_weather();
+void request_render_weather(bool _clearDisplay = false);
 void BeginSleep();
 boolean UpdateLocalTime();
 extern bool DecodeWeather(WiFiClient& json, String Type);
@@ -613,6 +613,18 @@ void run_config_server() {
         {
             set_mode(OPERATING_MODE);
             display_print_text(OpenSans12B, 15, 350, "Restarting to operation mode (config Ok)..");
+/*
+            epd_poweron();      // Switch on EPD display
+            epd_clear();        // Clear the screen 
+            epd_poweroff_all();
+
+            memset(framebuffer, 0xFF, EPD_WIDTH * EPD_HEIGHT / 2);
+*/
+            delay(2000);
+            if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
+                SetupTime();
+                request_render_weather(true);
+            }
         }
         else
         {
@@ -774,19 +786,21 @@ void run_validating_mode() {
     configOk = true;
     set_mode(OPERATING_MODE);
     save_config_to_memory();
-    delay(5000);
+    delay(1000);
     display_print_text(OpenSans12B, 15, 170, "Validation OK!\nReboot to operating mode....");
-
+/*
     epd_poweron();      // Switch on EPD display
     epd_clear();        // Clear the screen 
     epd_poweroff_all();
 
-    delay(1000);
     memset(framebuffer, 0xFF, EPD_WIDTH * EPD_HEIGHT / 2);
+*/
+    delay(3000);
 
-    UpdateLocalTime();
-    request_render_weather();
-
+    if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
+        SetupTime();
+        request_render_weather(true);
+    }
     BeginSleep();
 
     delay(15000);
