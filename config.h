@@ -551,7 +551,7 @@ void run_config_server() {
     wm.addParameter(&parmSleepHour);       
 
     //wm.setTimeout(120);
-    wm.setConfigPortalTimeout(20*1); //5 min
+    wm.setConfigPortalTimeout(60*5); //5 min
     wm.setSaveConfigCallback(saveConfigCallback);
 
     bool res = wm.startConfigPortal(network.c_str(), pass.c_str());
