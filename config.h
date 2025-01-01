@@ -55,8 +55,9 @@ void setFont(GFXfont const & font);
 boolean SetupTime();
 void request_render_weather(bool _clearDisplay = false);
 void BeginSleep();
-boolean UpdateLocalTime();
-extern bool DecodeWeather(WiFiClient& json, String Type);
+//boolean UpdateLocalTime();
+//extern bool DecodeWeather(WiFiClient& json, String Type);
+void DisplayStatusSection(int x, int y, int rssi);
 
 template<typename T>
 T value_or_default(JsonObject jobj, String key, T default_value) {
@@ -475,6 +476,8 @@ void display_validating_mode() {
     setFont(OpenSans18B);
     drawString(15, 110, "Validate settings..", LEFT);
 
+    DisplayStatusSection(575, 25, -100); 
+
     edp_update();       // Update the display to show the information
     epd_poweroff_all(); // Switch off all power to EPD
 }
@@ -490,6 +493,8 @@ void display_config_mode(String network, String pass, String ip) {
     drawString(15, 110, "WiFi Configuration..", LEFT);
     setFont(OpenSans12B);
     drawString(15, 170, "Connect to weather station...\nSSID: " + network + "\nPass: " + pass + "\nURL: http://" + ip , LEFT);
+
+    DisplayStatusSection(575, 25, -100); 
 
     edp_update();       // Update the display to show the information
     epd_poweroff_all(); // Switch off all power to EPD
@@ -613,14 +618,8 @@ void run_config_server() {
         {
             set_mode(OPERATING_MODE);
             display_print_text(OpenSans12B, 15, 350, "Restarting to operation mode (config Ok)..");
-/*
-            epd_poweron();      // Switch on EPD display
-            epd_clear();        // Clear the screen 
-            epd_poweroff_all();
-
-            memset(framebuffer, 0xFF, EPD_WIDTH * EPD_HEIGHT / 2);
-*/
             delay(2000);
+
             if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
                 SetupTime();
                 request_render_weather(true);
@@ -788,13 +787,6 @@ void run_validating_mode() {
     save_config_to_memory();
     delay(1000);
     display_print_text(OpenSans12B, 15, 170, "Validation OK!\nReboot to operating mode....");
-/*
-    epd_poweron();      // Switch on EPD display
-    epd_clear();        // Clear the screen 
-    epd_poweroff_all();
-
-    memset(framebuffer, 0xFF, EPD_WIDTH * EPD_HEIGHT / 2);
-*/
     delay(3000);
 
     if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
