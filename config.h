@@ -78,6 +78,31 @@ T nested_value_or_default(JsonObject parent_jobj, String key, String nested_key,
     }
 }
 
+void print_pt()
+{
+  printf("\n\nESP32 Partition table:\n\n");
+
+  printf("| Type | Sub |  Offset  |   Size   | Size (b) |       Label      |\n");
+  printf("| ---- | --- | -------- | -------- | -------- | ---------------- |\n");
+  
+  esp_partition_iterator_t pi = esp_partition_find(ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, NULL);
+  if (pi != NULL) {
+    do {
+      const esp_partition_t* p = esp_partition_get(pi);
+      printf("|  %02x  | %02x  | 0x%06X | 0x%06X | %8d | %-16s |\r\n", 
+        p->type, p->subtype, p->address, p->size, p->size, p->label);
+    } while (pi = (esp_partition_next(pi)));
+  }
+
+  uint32_t program_size = ESP.getSketchSize();
+  uint32_t free_size = ESP.getFlashChipSize();
+  uint32_t psram_size = ESP.getPsramSize();
+  uint32_t free_sketch_space = ESP.getFreeSketchSpace();
+
+  Serial.println("\nSketch size: " + String(program_size) + "\nFree sketch space: " + String(free_sketch_space) 
+    + "\nFlash chip size: " + String(free_size) + "\nPsram size: " + String(psram_size) +"\n\n");
+}
+
 String dbgPrintln(String _str = "") {
     String ret = _str == ""? "" : "=== DBG: " + _str;
     Serial.println(ret);
@@ -246,7 +271,7 @@ bool weather_handler(WiFiClient& resp_stream, Request request) {
     return true;
 }
 */
-bool http_request_data(WiFiClient& client, Request request, unsigned int retry=3) {
+bool http_request_data(WiFiClientSecure& client, Request request, unsigned int retry=3) {
     
     bool ret_val = false;
 
@@ -255,7 +280,8 @@ bool http_request_data(WiFiClient& client, Request request, unsigned int retry=3
         client.stop();
         HTTPClient http;
         Serial.printf("\nHTTP connecting to %s%s [retry left: %s]", request.server.c_str(), request.path.c_str(), String(retry).c_str());
-        http.begin(client, request.server, 80, request.path);
+        client.setCACert(request.ROOT_CA);
+        http.begin(client, request.server, 443, request.path);
         int http_code = http.GET();
         
         if(http_code == HTTP_CODE_OK) {
@@ -521,6 +547,8 @@ void run_config_server() {
     String network = "LilyGo-T5-4.7-weather-wifi";
     String pass = String(abs((int)esp_random())).substring(0, 4) + "0000";
 
+    print_pt();
+
     read_config_from_memory();
 
     IPAddress localIp(192, 168, 4, 1);
@@ -652,7 +680,7 @@ void run_validating_mode() {
     
     if (StartWiFi() == WL_CONNECTED) {
         
-        WiFiClient client;
+        WiFiClientSecure client;
         //bool is_location_fetched = false;
 
         dbgPrintln("Wifi connected, validate settings...");
@@ -737,13 +765,13 @@ void run_validating_mode() {
 
         if (!checkFailed)
         {
-            datetime_request.api_key = settings.TimezBBKey;
-            datetime_request.make_path(settings.Latitude, settings.Longitude);
+            datetime_request.api_key = settings.TimezBBKey;            
             datetime_request.handler = datetime_handler;
+            datetime_request.make_path(settings.Latitude, settings.Longitude);
 
             weather_request.api_key = settings.OwmApikey;
-            weather_request.make_path(settings.Latitude, settings.Longitude, settings.Units);
             weather_request.handler = weather_handler;
+            weather_request.make_path(settings.Latitude, settings.Longitude, settings.Units);
 
             bool is_time_fetched = http_request_data(client, datetime_request);
             bool is_weather_fetched = http_request_data(client, weather_request);

@@ -110,11 +110,11 @@ boolean SetupTime() {
   tzset(); // Set the TZ environment variable
   */
 
-  WiFiClient client;
+  WiFiClientSecure client;
 
   datetime_request.api_key = settings.TimezBBKey;
-  datetime_request.make_path(settings.Latitude, settings.Longitude);
   datetime_request.handler = datetime_handler;
+  datetime_request.make_path(settings.Latitude, settings.Longitude);
 
   bool is_time_fetched = http_request_data(client, datetime_request);
 
@@ -167,6 +167,8 @@ void loop() {
     dnsServer.processNextRequest();
   }
 }
+
+
 
 void setup() {
 
@@ -379,7 +381,7 @@ bool obtainWeatherData(WiFiClientSecure & client, const String & RequestType) {
   //api.openweathermap.org/data/2.5/RequestType?lat={lat}&lon={lon}&appid={API key}
   String uri = "/data/2.5/" + RequestType + "?lat=" + settings.Latitude + "&lon=" + settings.Longitude + "&appid=" + settings.OwmApikey + "&mode=json&units=" + units + "&lang=" + Language;
   if (RequestType == "onecall") uri += "&exclude=minutely,hourly,alerts,daily";
-  client.setCACert(OWM_ROOT_CA);
+  client.setCACert(ROOT_CA_OWM);
   http.begin(client, "api.openweathermap.org", 443, uri); //http.begin(uri,test_root_ca); //HTTPS example connection
   int httpCode = http.GET();
   if (httpCode == HTTP_CODE_OK) {
