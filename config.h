@@ -197,7 +197,7 @@ bool location_handler(WiFiClient& resp_stream, Request request) {
     }
     location_request = GeocodingNominatimRequest(request);
     GeocodingNominatimResponse& location_resp = location_request.response;
-    Serial.print("Geocoding...");
+    dbgPrintln("Geocoding...");
     update_location(location_resp, api_resp);
     location_resp.print();
     return true;
@@ -220,7 +220,7 @@ bool datetime_handler(WiFiClient& resp_stream, Request request) {
 
 JsonDocument deserialize(WiFiClient& resp_stream, bool is_embeded) {
     // https://arduinojson.org/v6/assistant/
-    Serial.print("\nDeserializing json, size: x bytes...");
+    dbgPrintln("Deserializing json, size: x bytes...");
     JsonDocument doc;//(size);
     DeserializationError error;
     
@@ -228,7 +228,7 @@ JsonDocument deserialize(WiFiClient& resp_stream, bool is_embeded) {
         String stream_as_string = resp_stream.readString();
         int begin = stream_as_string.indexOf('{');
         int end = stream_as_string.lastIndexOf('}');
-        Serial.print("\nEmbeded json algorithm obtained document...\n");
+        dbgPrintln("Embeded json algorithm obtained document...");
         String trimmed_json = stream_as_string.substring(begin, end+1);
         dbgPrintln(trimmed_json);
         error = deserializeJson(doc, trimmed_json);
@@ -236,7 +236,7 @@ JsonDocument deserialize(WiFiClient& resp_stream, bool is_embeded) {
         error = deserializeJson(doc, resp_stream);
     }
     if (error) {
-        Serial.print(F("\ndeserialization error:"));
+        dbgPrintln(F("deserialization error:"));
         dbgPrintln(error.c_str());
     } else {
         dbgPrintln("deserialized.");
@@ -297,18 +297,18 @@ bool http_request_data(WiFiClientSecure& client, Request request, unsigned int r
         ret_val = true;
         client.stop();
         HTTPClient http;
-        Serial.printf("\nHTTP connecting to %s%s [retry left: %s]", request.server.c_str(), request.path.c_str(), String(retry).c_str());
+        infoPrintln("HTTP connecting to " + request.server + request.path + " [retry left: " + String(retry) + "]");
         client.setCACert(request.ROOT_CA);
         http.begin(client, request.server, 443, request.path);
         int http_code = http.GET();
         
         if(http_code == HTTP_CODE_OK) {
-            dbgPrintln("\nHTTP connection established");
+            infoPrintln("HTTP connection OK");
             if (!request.handler(http.getStream(), request)) {
                 ret_val = false;
             }
         } else {
-            Serial.printf("\nHTTP connection failed %s, error: %s \n\n", String(http_code).c_str(), http.errorToString(http_code).c_str());
+            infoPrintln("HTTP connection failed " + String(http_code) + ", error: " + http.errorToString(http_code));
             ret_val = false;
         }
         client.stop();
@@ -590,7 +590,8 @@ void run_config_server() {
 
     dnsStarted = dnsServer.start(53, "*", WiFi.softAPIP());
     
-    Serial.printf("\nStart config server on ssid: %s, pass: %s, ip: %s \n\n", network.c_str(), pass.c_str(), WiFi.softAPIP().toString());
+    infoPrintln("");
+    infoPrintln("Start config server on ssid: " + network + ", pass: " + pass + ", ip: " + WiFi.softAPIP().toString() + "\n");
 
     display_config_mode(network, pass, WiFi.softAPIP().toString());
 
@@ -708,6 +709,7 @@ void run_config_server() {
             if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
                 collectAndWriteLog(CONFIG_MODE, true, false, false);
                 request_render_weather(true);
+                BeginSleep();
             }
         }
         else

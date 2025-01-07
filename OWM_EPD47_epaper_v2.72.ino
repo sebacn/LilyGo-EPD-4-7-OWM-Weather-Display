@@ -398,9 +398,12 @@ bool DecodeWeather(WiFiClient& json, String Type) {
   JsonDocument doc; //(64 * 1024);                      // allocate the JsonDocument
   DeserializationError error = deserializeJson(doc, json); // Deserialize the JSON document
   if (error) {                                             // Test if parsing succeeds.
-    dbgPrintln(F("deserializeJson() failed: "));
-    Serial.println(error.c_str());
+    infoPrintln("DeserializeJson() failed: " + String(error.c_str()));
     return false;
+  }
+  else
+  {
+    infoPrintln(F("DeserializeJson() OK"));
   }
   // convert it to a JsonObject
   JsonObject root = doc.as<JsonObject>();
@@ -501,20 +504,22 @@ String ConvertUnixTime(int unix_time) {
 bool obtainWeatherData(WiFiClientSecure & client, const String & RequestType) {
   const String units = (settings.Units == "M" ? "metric" : "imperial");
   client.stop(); // close connection before sending a new request
-  HTTPClient http;
+  HTTPClient http;  
   //api.openweathermap.org/data/2.5/RequestType?lat={lat}&lon={lon}&appid={API key}
   String uri = "/data/2.5/" + RequestType + "?lat=" + settings.Latitude + "&lon=" + settings.Longitude + "&appid=" + settings.OwmApikey + "&mode=json&units=" + units + "&lang=" + Language;
   if (RequestType == "onecall") uri += "&exclude=minutely,hourly,alerts,daily";
   client.setCACert(ROOT_CA_OWM);
+  infoPrintln("HTTP connecting to api.openweathermap.org" + uri );
   http.begin(client, "api.openweathermap.org", 443, uri); //http.begin(uri,test_root_ca); //HTTPS example connection
   int httpCode = http.GET();
   if (httpCode == HTTP_CODE_OK) {
+    infoPrintln("Connection OK");
     if (!DecodeWeather(http.getStream(), RequestType)) return false;
     client.stop();
   }
   else
   {
-    dbgPrintln("connection failed, error: %" + http.errorToString(httpCode));
+    infoPrintln("Connection failed, error: %" + http.errorToString(httpCode));
     client.stop();
     http.end();
     return false;
