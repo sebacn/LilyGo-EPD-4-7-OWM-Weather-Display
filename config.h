@@ -35,6 +35,7 @@ int SLEEP_INTERVAL_MIN;
 bool shouldSaveConfig = false;
 bool configOk = false;
 bool dnsStarted = false;
+//bool dbglog_enable;
 extern uint8_t *framebuffer;
 extern LogSettings logSettings;
 
@@ -118,7 +119,10 @@ void print_pt()
 
 String dbgPrintln(String _str) {
     #if defined(PROJ_DEBUG_ENABLE)
-    Serial.printf("%.03f ",millis()/1000.0f); Serial.println("[D] " + _str);
+    if (settings.DbgLogEnable)
+    {
+        Serial.printf("%.03f ",millis()/1000.0f); Serial.println("[D] " + _str);
+    }    
     #endif
     return _str + '\n';
 }
@@ -475,11 +479,12 @@ void read_config_from_memory() {
     settings.WakeupHour = preferences.getInt("WakeupHour", 8);
     settings.SleepHour = preferences.getInt("SleepHour", 23); 
     settings.Units = preferences.getString("Units", "M");
+    settings.DbgLogEnable = preferences.getBool("DbgLogEnable", false);
 
-    logSettings.INFLUXDB_URL = preferences.getString("INFLUXDB_URL");
-    logSettings.INFLUXDB_BUCKET = preferences.getString("INFLUXDB_BUCKET");
-    logSettings.INFLUXDB_ORG = preferences.getString("INFLUXDB_ORG");
-    logSettings.INFLUXDB_TOKEN = preferences.getString("INFLUXDB_TOKEN");
+    logSettings.INFLUXDB_URL = preferences.getString("INFLUXDB_URL", "");
+    logSettings.INFLUXDB_BUCKET = preferences.getString("INFLUXDB_BUCKET", "");
+    logSettings.INFLUXDB_ORG = preferences.getString("INFLUXDB_ORG", "");
+    logSettings.INFLUXDB_TOKEN = preferences.getString("INFLUXDB_TOKEN", "");
     
     preferences.end();
 
@@ -505,6 +510,7 @@ void save_config_to_memory() {
     preferences.putInt("WakeupHour", settings.WakeupHour);
     preferences.putInt("SleepHour", settings.SleepHour); 
     preferences.putString("Units", settings.Units); 
+    preferences.putBool("DbgLogEnable", settings.DbgLogEnable);
 
     preferences.putString("INFLUXDB_URL", logSettings.INFLUXDB_URL);
     preferences.putString("INFLUXDB_BUCKET", logSettings.INFLUXDB_BUCKET);
@@ -598,6 +604,7 @@ void run_config_server() {
     WiFiManagerParameter parmSleepDuration("parmSleepDuration", "Sleep duration (5-60 min)", String(settings.SleepDuration).c_str(), 10);
     WiFiManagerParameter parmWakeupHour("parmWakeupHour", "Wakeup hour", String(settings.WakeupHour).c_str(), 10);
     WiFiManagerParameter parmSleepHour("parmSleepHour", "Sleep hour", String(settings.SleepHour).c_str(), 10);   
+    WiFiManagerParameter parmDbgLogEnable("parmDbgLogEnable", "Debug Log Enable", String(settings.DbgLogEnable).c_str(), 5);
 
     WiFiManagerParameter parmINFLUXDB_URL("parmINFLUXDB_URL", "Log INFLUXDB_URL", logSettings.INFLUXDB_URL.c_str(), 50);
     WiFiManagerParameter parmINFLUXDB_BUCKET("parmINFLUXDB_BUCKET", "Log INFLUXDB_BUCKET", logSettings.INFLUXDB_BUCKET.c_str(), 50);
@@ -614,6 +621,7 @@ void run_config_server() {
     wm.addParameter(&parmSleepDuration);
     wm.addParameter(&parmWakeupHour);
     wm.addParameter(&parmSleepHour);    
+    wm.addParameter(&parmDbgLogEnable); 
 
     wm.addParameter(&parmINFLUXDB_URL);
     wm.addParameter(&parmINFLUXDB_BUCKET);
@@ -679,6 +687,8 @@ void run_config_server() {
             settings.SleepDuration = atoi(parmSleepDuration.getValue());
             settings.WakeupHour = atoi(parmWakeupHour.getValue());
             settings.SleepHour = atoi(parmSleepHour.getValue());   
+            settings.DbgLogEnable = (bool)atoi(parmDbgLogEnable.getValue());
+
             logSettings.INFLUXDB_URL = String(parmINFLUXDB_URL.getValue());
             logSettings.INFLUXDB_BUCKET = String(parmINFLUXDB_BUCKET.getValue());
             logSettings.INFLUXDB_ORG = String(parmINFLUXDB_ORG.getValue());

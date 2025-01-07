@@ -69,7 +69,7 @@ struct Settings {
     int  WakeupHour      = 8;  // Wakeup after 07:00 to save battery power
     int  SleepHour       = 23; // Sleep  after 23:00 to save battery power                                                           
     String Units = "M";        // Use 'M' for Metric or I for Imperial 
-
+    bool DbgLogEnable = false;
 
     void print() {
         //dbgPrintln("City (" + String(sizeof(City)) + "):");
@@ -84,7 +84,8 @@ struct Settings {
             + ", PositionStackKey: " + PositionStackKey 
             + ", SleepDuration: " + String(SleepDuration)
             + ", WakeupHour: " + String(WakeupHour)
-            + ", SleepHour: " + String(SleepHour)); 
+            + ", SleepHour: " + String(SleepHour)
+            + ", DbgLogEnable: " + String(DbgLogEnable)); 
     }
     
 } ;
