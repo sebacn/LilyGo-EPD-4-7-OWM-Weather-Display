@@ -13,6 +13,7 @@
 #include <HTTPClient.h>
 #include "units.h"
 #include "aqi_metric.h"
+#include "loginfo.h"
 
 #include "fonts/opensans8b.h"
 #include "fonts/opensans10b.h"
@@ -35,6 +36,7 @@ bool shouldSaveConfig = false;
 bool configOk = false;
 bool dnsStarted = false;
 extern uint8_t *framebuffer;
+extern LogSettings logSettings;
 
 Preferences preferences;
 DNSServer dnsServer;
@@ -42,7 +44,6 @@ Settings settings;
 struct GeocodingNominatimRequest location_request;
 struct TimeZoneDbRequest datetime_request;
 struct WeatherRequest weather_request;
-
 
 int get_mode();
 extern int drawString(int x, int y, String text, alignment align);
@@ -58,6 +59,7 @@ void BeginSleep();
 //boolean UpdateLocalTime();
 //extern bool DecodeWeather(WiFiClient& json, String Type);
 void DisplayStatusSection(int x, int y, int rssi);
+void collectAndWriteLog(int mode, bool is_time_fetched, bool is_weather_fetched, bool is_aq_fetched);
 
 template<typename T>
 T value_or_default(JsonObject jobj, String key, T default_value) {
@@ -76,6 +78,11 @@ T nested_value_or_default(JsonObject parent_jobj, String key, String nested_key,
     } else {
         return parent_jobj[key][nested_key];
     }
+}
+
+String infoPrintln(String _str) {
+    Serial.printf("%.03f ",millis()/1000.0f); Serial.println("[I] " + _str);
+    return _str + '\n';
 }
 
 void print_pt()
@@ -99,14 +106,21 @@ void print_pt()
   uint32_t psram_size = ESP.getPsramSize();
   uint32_t free_sketch_space = ESP.getFreeSketchSpace();
 
-  Serial.println("\nSketch size: " + String(program_size) + "\nFree sketch space: " + String(free_sketch_space) 
-    + "\nFlash chip size: " + String(free_size) + "\nPsram size: " + String(psram_size) +"\n\n");
+  Serial.println("");
+  infoPrintln("Build date time: " + String(__DATE__) + " " + __TIME__);
+  infoPrintln("Sketch size: " + String(program_size));
+  infoPrintln("Free sketch space: " + String(free_sketch_space));
+  infoPrintln("Flash chip size: " + String(free_size));
+  infoPrintln("Psram size: " + String(psram_size));
+  infoPrintln("Stack size: " + String(CONFIG_ARDUINO_LOOP_STACK_SIZE));
+  infoPrintln("uxTaskGetStackHighWaterMark: " + String(uxTaskGetStackHighWaterMark(NULL)) + "\n\n"); 
 }
 
-String dbgPrintln(String _str = "") {
-    String ret = _str == ""? "" : "=== DBG: " + _str;
-    Serial.println(ret);
-    return ret + "\n";
+String dbgPrintln(String _str) {
+    #if defined(PROJ_DEBUG_ENABLE)
+    Serial.printf("%.03f ",millis()/1000.0f); Serial.println("[D] " + _str);
+    #endif
+    return _str + '\n';
 }
 
 //callback notifying us of the need to save config
@@ -383,25 +397,27 @@ bool connect_to_wifi(unsigned int retry=5) {
 }
 */
 
-void print_reset_reason(RESET_REASON reason) {
+String print_reset_reason(RESET_REASON reason) {
+    String ret = "";
     switch ( reason) {
-        case 1 : Serial.print("POWERON_RESET"); break;
-        case 3 : Serial.print("SW_RESET"); break;
-        case 4 : Serial.print("OWDT_RESET"); break;
-        case 5 : Serial.print("DEEPSLEEP_RESET"); break;
-        case 6 : Serial.print("SDIO_RESET"); break; 
-        case 7 : Serial.print("TG0WDT_SYS_RESET"); break;
-        case 8 : Serial.print("TG1WDT_SYS_RESET"); break;
-        case 9 : Serial.print("RTCWDT_SYS_RESET"); break;
-        case 10 : Serial.print("INTRUSION_RESET"); break;
-        case 11 : Serial.print("TGWDT_CPU_RESET"); break;
-        case 12 : Serial.print("SW_CPU_RESET"); break;
-        case 13 : Serial.print("RTCWDT_CPU_RESET"); break;
-        case 14 : Serial.print("EXT_CPU_RESET"); break;
-        case 15 : Serial.print("RTCWDT_BROWN_OUT_RESET"); break;
-        case 16 : Serial.print("RTCWDT_RTC_RESET"); break;
-        default : Serial.print("UNKNOWN");
+        case 1 : ret = "POWERON_RESET"; break;
+        case 3 : ret = "SW_RESET"; break;
+        case 4 : ret = "OWDT_RESET"; break;
+        case 5 : ret = "DEEPSLEEP_RESET"; break;
+        case 6 : ret = "SDIO_RESET"; break; 
+        case 7 : ret = "TG0WDT_SYS_RESET"; break;
+        case 8 : ret = "TG1WDT_SYS_RESET"; break;
+        case 9 : ret = "RTCWDT_SYS_RESET"; break;
+        case 10 : ret = "INTRUSION_RESET"; break;
+        case 11 : ret = "TGWDT_CPU_RESET"; break;
+        case 12 : ret = "SW_CPU_RESET"; break;
+        case 13 : ret = "RTCWDT_CPU_RESET"; break;
+        case 14 : ret = "EXT_CPU_RESET"; break;
+        case 15 : ret = "RTCWDT_BROWN_OUT_RESET"; break;
+        case 16 : ret = "RTCWDT_RTC_RESET"; break;
+        default : ret = "UNKNOWN";
     }
+    return ret;
 }
 
 
@@ -409,17 +425,15 @@ void wakeup_reason() {
     esp_sleep_wakeup_cause_t wakeup_reason;
     wakeup_reason = esp_sleep_get_wakeup_cause();
 
-    Serial.print("CPU0 reset reason: ");
-    print_reset_reason(rtc_get_reset_reason(0));
-    Serial.print(",  CPU1 reset reason: ");
-    print_reset_reason(rtc_get_reset_reason(1));
-    dbgPrintln();
+    dbgPrintln("CPU0 reset reason: " + print_reset_reason(rtc_get_reset_reason(0)));
+    dbgPrintln("CPU1 reset reason: " + print_reset_reason(rtc_get_reset_reason(1)));
+    dbgPrintln("");
     
     switch(wakeup_reason){
         //dbgPrintln("Location variable: " + String(curr_loc));
         
         case ESP_SLEEP_WAKEUP_EXT0 : 
-            dbgPrintln("\nWakeup by ext signal RTC_IO -> GPIO39"); 
+            dbgPrintln("Wakeup by ext signal RTC_IO -> GPIO39"); 
             if (get_mode() == OPERATING_MODE) {
                 // Toggle between 2 screens caused by button press WAKE_BTN_PIN
             }        
@@ -434,7 +448,7 @@ void wakeup_reason() {
         case ESP_SLEEP_WAKEUP_TIMER : dbgPrintln("Wakeup by timer"); break;
         case ESP_SLEEP_WAKEUP_TOUCHPAD : dbgPrintln("Wakeup by touchpad"); break;
         case ESP_SLEEP_WAKEUP_ULP : dbgPrintln("Wakeup by ULP program"); break;
-        default : Serial.printf("Wakeup not caused by deep sleep: %d\n", wakeup_reason); 
+        default : dbgPrintln("Wakeup not caused by deep sleep: " + String(wakeup_reason)); 
             if (rtc_get_reset_reason(0) == POWERON_RESET && rtc_get_reset_reason(1) == EXT_CPU_RESET)
             {
                 get_mode();
@@ -461,11 +475,17 @@ void read_config_from_memory() {
     settings.WakeupHour = preferences.getInt("WakeupHour", 8);
     settings.SleepHour = preferences.getInt("SleepHour", 23); 
     settings.Units = preferences.getString("Units", "M");
+
+    logSettings.INFLUXDB_URL = preferences.getString("INFLUXDB_URL");
+    logSettings.INFLUXDB_BUCKET = preferences.getString("INFLUXDB_BUCKET");
+    logSettings.INFLUXDB_ORG = preferences.getString("INFLUXDB_ORG");
+    logSettings.INFLUXDB_TOKEN = preferences.getString("INFLUXDB_TOKEN");
     
     preferences.end();
 
     delay(1000);
     settings.print();
+    logSettings.print();
 }
 
 void save_config_to_memory() {
@@ -486,10 +506,17 @@ void save_config_to_memory() {
     preferences.putInt("SleepHour", settings.SleepHour); 
     preferences.putString("Units", settings.Units); 
 
+    preferences.putString("INFLUXDB_URL", logSettings.INFLUXDB_URL);
+    preferences.putString("INFLUXDB_BUCKET", logSettings.INFLUXDB_BUCKET);
+    preferences.putString("INFLUXDB_ORG", logSettings.INFLUXDB_ORG);
+    preferences.putString("INFLUXDB_TOKEN", logSettings.INFLUXDB_TOKEN);
+
     preferences.end();
 
     delay(1000);
+
     settings.print();  
+    logSettings.print();
 }
 
 void display_validating_mode() {
@@ -570,7 +597,12 @@ void run_config_server() {
     WiFiManagerParameter parmUnits("parmUnits", "Units (M/I)", settings.Units.c_str(), 3);
     WiFiManagerParameter parmSleepDuration("parmSleepDuration", "Sleep duration (5-60 min)", String(settings.SleepDuration).c_str(), 10);
     WiFiManagerParameter parmWakeupHour("parmWakeupHour", "Wakeup hour", String(settings.WakeupHour).c_str(), 10);
-    WiFiManagerParameter parmSleepHour("parmSleepHour", "Sleep hour", String(settings.SleepHour).c_str(), 10);    
+    WiFiManagerParameter parmSleepHour("parmSleepHour", "Sleep hour", String(settings.SleepHour).c_str(), 10);   
+
+    WiFiManagerParameter parmINFLUXDB_URL("parmINFLUXDB_URL", "Log INFLUXDB_URL", logSettings.INFLUXDB_URL.c_str(), 50);
+    WiFiManagerParameter parmINFLUXDB_BUCKET("parmINFLUXDB_BUCKET", "Log INFLUXDB_BUCKET", logSettings.INFLUXDB_BUCKET.c_str(), 50);
+    WiFiManagerParameter parmINFLUXDB_ORG("parmINFLUXDB_ORG", "Log INFLUXDB_ORG", logSettings.INFLUXDB_ORG.c_str(), 50);
+    WiFiManagerParameter parmINFLUXDB_TOKEN("parmINFLUXDB_TOKEN", "LogINFLUXDB_TOKEN", logSettings.INFLUXDB_TOKEN.c_str(), 100); 
 
     WiFiManager wm;
 
@@ -581,7 +613,12 @@ void run_config_server() {
     wm.addParameter(&parmUnits);
     wm.addParameter(&parmSleepDuration);
     wm.addParameter(&parmWakeupHour);
-    wm.addParameter(&parmSleepHour);       
+    wm.addParameter(&parmSleepHour);    
+
+    wm.addParameter(&parmINFLUXDB_URL);
+    wm.addParameter(&parmINFLUXDB_BUCKET);
+    wm.addParameter(&parmINFLUXDB_ORG);
+    wm.addParameter(&parmINFLUXDB_TOKEN);   
 
     //wm.setTimeout(120);
     wm.setConfigPortalTimeout(60*5); //5 min
@@ -594,14 +631,20 @@ void run_config_server() {
         dbgPrintln("Config: WiFi timeout..");
 
         if (StartWiFi() == WL_CONNECTED) {
-            configTime(0, 0, "0.uk.pool.ntp.org", "time.nist.gov");
 
+            bool timeOk = false;
+
+            configTime(0, 0, "0.uk.pool.ntp.org", "time.nist.gov");
+            
             if (getLocalTime(&timeinfo, 5000)) { // Wait for 5-sec for time to synchronise
 
                 char buffer[80];
                 strftime(buffer, 80, "%Y-%m-%d %H:%M:%S", &timeinfo);
                 display_print_text(OpenSans12B, 15, 330, "UTC Date and time: " + String(buffer));
+                timeOk = true;
             }
+
+            collectAndWriteLog(CONFIG_MODE, timeOk, false, false);
         }
 
         display_print_text(OpenSans12B, 15, 370, "Wifi connection timeout..\nConfig validation failed..\nPower off");
@@ -635,7 +678,11 @@ void run_config_server() {
             settings.TimezBBKey = String(parmTimezdbKey.getValue());
             settings.SleepDuration = atoi(parmSleepDuration.getValue());
             settings.WakeupHour = atoi(parmWakeupHour.getValue());
-            settings.SleepHour = atoi(parmSleepHour.getValue());            
+            settings.SleepHour = atoi(parmSleepHour.getValue());   
+            logSettings.INFLUXDB_URL = String(parmINFLUXDB_URL.getValue());
+            logSettings.INFLUXDB_BUCKET = String(parmINFLUXDB_BUCKET.getValue());
+            logSettings.INFLUXDB_ORG = String(parmINFLUXDB_ORG.getValue());
+            logSettings.INFLUXDB_TOKEN = String(parmINFLUXDB_TOKEN.getValue());         
             
             save_config_to_memory();
 
@@ -649,7 +696,7 @@ void run_config_server() {
             delay(2000);
 
             if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
-                SetupTime();
+                collectAndWriteLog(CONFIG_MODE, true, false, false);
                 request_render_weather(true);
             }
         }
@@ -710,14 +757,14 @@ void run_validating_mode() {
           keyErrMsg += "SleepDuration,";
         }
 
-        if (settings.WakeupHour == 0 || settings.WakeupHour > 23)
-        {
-          keyErrMsg += "WakeupHour,";
-        }
-
-        if (settings.SleepHour > 23)
+        if (settings.SleepHour > 23 || settings.SleepHour < 0)
         {
           keyErrMsg += "SleepHour";
+        }
+
+        if (settings.WakeupHour > 23 || settings.WakeupHour < 0)
+        {
+          keyErrMsg += "WakeUpHour";
         }
 
         dbgPrintln("Validate key, missing keys: " + (keyErrMsg == ""? "No" : keyErrMsg));
@@ -726,6 +773,10 @@ void run_validating_mode() {
         {
 
           display_print_text(OpenSans12B, 15, 170, "Parameter(s) is/are not configured:\n" + keyErrMsg + "\n" + "Restarting in 10 sec");  
+
+          if (StartWiFi() == WL_CONNECTED) {
+            collectAndWriteLog(VALIDATING_MODE, false, false, false);
+          }
 
           set_mode(CONFIG_MODE);
           delay(15000);
@@ -793,6 +844,10 @@ void run_validating_mode() {
         {
             display_print_text(OpenSans12B, 15, 170, "Validation failed:\n" + keyErrMsg);
 
+            if (StartWiFi() == WL_CONNECTED) {
+                collectAndWriteLog(VALIDATING_MODE, false, false, false);
+            }
+
             delay(15000);
             set_mode(CONFIG_MODE);
             ESP.restart();
@@ -811,6 +866,11 @@ void run_validating_mode() {
     }
 
     configOk = true;
+
+    if (StartWiFi() == WL_CONNECTED) {
+        collectAndWriteLog(VALIDATING_MODE, false, false, false);
+    }
+
     set_mode(OPERATING_MODE);
     save_config_to_memory();
     delay(1000);
@@ -818,7 +878,6 @@ void run_validating_mode() {
     delay(3000);
 
     if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
-        SetupTime();
         request_render_weather(true);
     }
     BeginSleep();

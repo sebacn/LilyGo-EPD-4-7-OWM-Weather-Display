@@ -14,13 +14,31 @@
 #include <WiFi.h>               // In-built
 #include <SPI.h>                // In-built
 //#include <time.h>               // In-built
-#include <ESP32Time.h>
+#include <RTClib.h>
 
 #include "owm_credentials.h"
 #include "forecast_record.h"
 #include "lang.h"
 #include "config.h"
+#include "loginfo.h"
 
+/*
+Replace in the sdkconfig.h
+
+From:
+#define CONFIG_ARDUINO_LOOP_STACK_SIZE 8192
+
+To:
+#if defined(CONFIG_ARDUINO_LOOP_STACK_SIZE_OVERRIDE)
+    #define CONFIG_ARDUINO_LOOP_STACK_SIZE CONFIG_ARDUINO_LOOP_STACK_SIZE_OVERRIDE
+#else
+    #define CONFIG_ARDUINO_LOOP_STACK_SIZE 8192
+#endif
+*/
+
+#if CONFIG_ARDUINO_LOOP_STACK_SIZE <= 8192
+#error "Please increase ARDUINO_LOOP_STACK_SIZE to 16384 !!! (.platformio\packages\framework-arduinoespressif32\tools\sdk\esp32\dio_qspi\include\sdkconfig.h)"
+#endif
 
 #define SCREEN_WIDTH   EPD_WIDTH
 #define SCREEN_HEIGHT  EPD_HEIGHT
@@ -66,6 +84,7 @@ float snow_readings[max_readings]        = {0};
 long StartTime       = 0;
 long SleepTimer      = 0;
 long Delta           = 30; // ESP32 rtc speed compensation, prevents display at xx:59:yy and then xx:00:yy (one minute later) to save power
+int boot_count;
 
 //fonts
 #include "fonts/opensans5cb_special2.h"
@@ -89,17 +108,118 @@ long Delta           = 30; // ESP32 rtc speed compensation, prevents display at 
 GFXfont  currentFont;
 uint8_t *framebuffer;
 
+extern LogInfo logInfo;
+
 void run_operating_mode();
 void DisplayAirQualitySection(int x, int y);
+String dbgPrintln(String _str);
+
+void collectAndWriteLog(int mode, bool is_time_fetched, bool is_weather_fetched, bool is_aq_fetched)
+{
+    dbgPrintln("InfluxDBClient: collectAndWriteLog");
+
+    logInfo.Mode = mode;
+    logInfo.ConfigOk = configOk;
+    logInfo.BootCount = boot_count;
+    logInfo.UTCTimestamp = is_time_fetched? (datetime_request.response.dt - datetime_request.response.gmt_offset) : 0;
+    logInfo.BatteryPct = DrawBattery(0, 0, true);
+    logInfo.TimeFetchOk = is_time_fetched;
+    logInfo.WeatherFetchOk = is_weather_fetched;
+    logInfo.AQIFetchOk = is_aq_fetched;
+
+    writeLogInfo();
+}
+
+void enable_timed_sleep(int interval_minutes) {
+    // sleep and wake up round minutes, ex every 15 mins
+    // will wake up at 7:15, 7:30, 7:45 etc.
+    dbgPrintln("enable_timed_sleep (MIN): " + String(interval_minutes));
+
+    DateTime curTime = DateTime(datetime_request.response.dt);
+    DateTime newTime;
+    char date_format[] = "YYYY.MM.DD:hh.mm.ss";
+    char date_format2[] = "YYYY.MM.DD:hh.mm.ss";
+
+    int idx = (curTime.minute()/interval_minutes) + 1;
+
+    if (interval_minutes * idx >= 60)
+    {
+        newTime = curTime + TimeSpan(0, 0, 60 - curTime.minute(), 0); //add time to xx.00.00
+    }
+    else
+    {        
+        newTime = curTime + TimeSpan(0, 0, interval_minutes * idx - curTime.minute(), 0);
+    }
+
+    if (newTime.second() > 0)
+    {
+        // set time to xx.xx.15
+        newTime = newTime - TimeSpan(0, 0, 0, newTime.second()); 
+        newTime = newTime + TimeSpan(0, 0, 0, 15); // add 15 sec to not wakeUp before expected min
+    }
+
+    if ((settings.WakeupHour > 0 || settings.SleepHour > 0) && settings.WakeupHour < 24 && settings.SleepHour < 24) // sleep/wake hours must be in range 0-23
+    {
+        int addHrs = 0;
+        int loopCnt = 0;
+        for (int idx = settings.SleepHour; idx != settings.WakeupHour; idx++)
+        {
+            if (idx == 24)
+            {
+                idx = 0;
+            }
+
+            if (addHrs > 0 
+            || (newTime.hour() == idx && idx == settings.SleepHour && newTime.minute() > 0) //for sleep hour start counting when minutes > 0
+            || (newTime.hour() == idx && idx != settings.SleepHour ) ) 
+            {                
+                addHrs++;        
+            } 
+
+            loopCnt++;
+            if (loopCnt > 25) //exit loop
+            {
+                addHrs = 0;
+                break;
+            }
+        }
+
+        if (addHrs > 0) 
+        {
+            newTime = newTime + TimeSpan(0, addHrs, 0, 0); // add sleep hours
+            newTime = newTime - TimeSpan(0, 0, newTime.minute(), 0); // reset minutes to 0    
+        }
+    }
+   
+    TimeSpan ts = (newTime - curTime);
+    int sleep_time_seconds = ts.totalseconds();
+    
+    infoPrintln("DateTime Curreent :" + String(curTime.toString(date_format)));
+    infoPrintln("DateTime WakeUp at:" + String(newTime.toString(date_format2)));
+    char buffer[150];
+    sprintf(buffer, "%d hours, %d minutes and %d seconds (total sec: %d)\n", ts.hours(), ts.minutes(), ts.seconds(), sleep_time_seconds);
+    infoPrintln("DateTime Sleep for " + String(buffer));
+
+    uint64_t sleep_time_micro_sec = sleep_time_seconds;
+    sleep_time_micro_sec = sleep_time_micro_sec * 1000 * 1000;
+
+    esp_sleep_enable_timer_wakeup(sleep_time_micro_sec);
+}
 
 void BeginSleep() {
   epd_poweroff_all();
   UpdateLocalTime();
+
+/*
   SleepTimer = (settings.SleepDuration * 60 - ((CurrentMin % settings.SleepDuration) * 60 + CurrentSec)) + Delta; //Some ESP32 have a RTC that is too fast to maintain accurate time, so add an offset
   esp_sleep_enable_timer_wakeup(SleepTimer * 1000000LL); // in Secs, 1000000LL converts to Secs as unit = 1uSec
   Serial.println("Awake for : " + String((millis() - StartTime) / 1000.0, 3) + "-secs");
   Serial.println("Entering " + String(SleepTimer) + " (secs) of sleep time");
   Serial.println("Starting deep-sleep period...");
+  */
+
+  enable_timed_sleep(settings.SleepDuration);
+
   esp_deep_sleep_start();  // Sleep for e.g. 30 minutes
 }
 
@@ -122,7 +242,7 @@ boolean SetupTime() {
 }
 
 uint8_t StartWiFi() {
-  Serial.println("\r\nConnecting to: " + settings.WiFiSSID);
+  dbgPrintln("Connecting to: " + settings.WiFiSSID);
   IPAddress dns(8, 8, 8, 8); // Use Google DNS
   WiFi.disconnect();
   WiFi.mode(WIFI_STA); // switch off AP
@@ -130,33 +250,33 @@ uint8_t StartWiFi() {
   WiFi.setAutoReconnect(true);
   WiFi.begin(settings.WiFiSSID.c_str(), settings.WiFiPass.c_str());
   if (WiFi.waitForConnectResult() != WL_CONNECTED) {
-    Serial.printf("STA: Failed!\n");
+    dbgPrintln("STA: Failed!");
     WiFi.disconnect(false);
     delay(500);
     WiFi.begin(settings.WiFiSSID.c_str(), settings.WiFiPass.c_str());
   }
   if (WiFi.status() == WL_CONNECTED) {
     wifi_signal = WiFi.RSSI(); // Get Wifi Signal strength now, because the WiFi will be turned off to save power!
-    Serial.println("WiFi connected at: " + WiFi.localIP().toString());
+    dbgPrintln("WiFi connected at: " + WiFi.localIP().toString());
   }
-  else Serial.println("WiFi connection *** FAILED ***");
+  else dbgPrintln("WiFi connection *** FAILED ***");
   return WiFi.status();
 }
 
 void StopWiFi() {
   WiFi.disconnect();
   WiFi.mode(WIFI_OFF);
-  Serial.println("WiFi switched Off");
+  dbgPrintln("WiFi switched Off");
 }
 
 void InitialiseSystem() {
   StartTime = millis();
   Serial.begin(115200);
   while (!Serial);
-  Serial.println(String(__FILE__) + "\nStarting...");
+  dbgPrintln(String(__FILE__) + " Starting...");
   epd_init();
   framebuffer = (uint8_t *)ps_calloc(sizeof(uint8_t), EPD_WIDTH * EPD_HEIGHT / 2);
-  if (!framebuffer) Serial.println("Memory alloc failed!");
+  if (!framebuffer) dbgPrintln("Memory alloc failed!");
   memset(framebuffer, 0xFF, EPD_WIDTH * EPD_HEIGHT / 2);
 }
 
@@ -174,9 +294,11 @@ void setup() {
 
   InitialiseSystem();
 
+  boot_count++;
+
   Serial.begin(115200); 
 
-  dbgPrintln("\n\n=== WEATHER STATION ===");
+  dbgPrintln("\n\n=== WEATHER STATION ===\n\n");
   //init_display();
   wakeup_reason();
 
@@ -252,7 +374,7 @@ void request_render_weather(bool _clearDisplay)
     if (RxAqidata == false) RxAqidata = obtainWeatherData(client, "air_pollution");
     Attempts++;
   }
-  Serial.println("Received all weather data...");
+  dbgPrintln("Received all weather data...");
   if (RxWeather && RxForecast && RxAqidata) { // Only if received both Weather or Forecast proceed
     StopWiFi();         // Reduces power consumption
     epd_poweron();      // Switch on EPD display
@@ -261,6 +383,8 @@ void request_render_weather(bool _clearDisplay)
     edp_update();       // Update the display to show the information
     epd_poweroff_all(); // Switch off all power to EPD
   }
+
+  collectAndWriteLog(OPERATING_MODE, true, RxWeather, RxAqidata);
 }
 
 void Convert_Readings_to_Imperial() { // Only the first 3-hours are used
@@ -270,56 +394,56 @@ void Convert_Readings_to_Imperial() { // Only the first 3-hours are used
 }
 
 bool DecodeWeather(WiFiClient& json, String Type) {
-  Serial.print(F("\nCreating object...and "));
+  dbgPrintln(F("Creating object...and "));
   JsonDocument doc; //(64 * 1024);                      // allocate the JsonDocument
   DeserializationError error = deserializeJson(doc, json); // Deserialize the JSON document
   if (error) {                                             // Test if parsing succeeds.
-    Serial.print(F("deserializeJson() failed: "));
+    dbgPrintln(F("deserializeJson() failed: "));
     Serial.println(error.c_str());
     return false;
   }
   // convert it to a JsonObject
   JsonObject root = doc.as<JsonObject>();
-  Serial.println(" Decoding " + Type + " data");
+  dbgPrintln("Decoding " + Type + " data");
   if (Type == "onecall") {
     // All Serial.println statements are for diagnostic purposes and some are not required, remove if not needed with //
     WxConditions[0].High        = -50; // Minimum forecast low
     WxConditions[0].Low         = 50;  // Maximum Forecast High
     WxConditions[0].FTimezone   = doc["timezone_offset"]; // "0"
     JsonObject current = doc["current"];
-    WxConditions[0].Sunrise     = current["sunrise"];                              Serial.println("SRis: " + String(WxConditions[0].Sunrise));
-    WxConditions[0].Sunset      = current["sunset"];                               Serial.println("SSet: " + String(WxConditions[0].Sunset));
-    WxConditions[0].Temperature = current["temp"];                                 Serial.println("Temp: " + String(WxConditions[0].Temperature));
-    WxConditions[0].FeelsLike   = current["feels_like"];                           Serial.println("FLik: " + String(WxConditions[0].FeelsLike));
-    WxConditions[0].Pressure    = current["pressure"];                             Serial.println("Pres: " + String(WxConditions[0].Pressure));
-    WxConditions[0].Humidity    = current["humidity"];                             Serial.println("Humi: " + String(WxConditions[0].Humidity));
-    WxConditions[0].DewPoint    = current["dew_point"];                            Serial.println("DPoi: " + String(WxConditions[0].DewPoint));
-    WxConditions[0].UVI         = current["uvi"];                                  Serial.println("UVin: " + String(WxConditions[0].UVI));
-    WxConditions[0].Cloudcover  = current["clouds"];                               Serial.println("CCov: " + String(WxConditions[0].Cloudcover));
-    WxConditions[0].Visibility  = current["visibility"];                           Serial.println("Visi: " + String(WxConditions[0].Visibility));
-    WxConditions[0].Windspeed   = current["wind_speed"];                           Serial.println("WSpd: " + String(WxConditions[0].Windspeed));
-    WxConditions[0].Winddir     = current["wind_deg"];                             Serial.println("WDir: " + String(WxConditions[0].Winddir));
+    WxConditions[0].Sunrise     = current["sunrise"];                              dbgPrintln("SRis: " + String(WxConditions[0].Sunrise));
+    WxConditions[0].Sunset      = current["sunset"];                               dbgPrintln("SSet: " + String(WxConditions[0].Sunset));
+    WxConditions[0].Temperature = current["temp"];                                 dbgPrintln("Temp: " + String(WxConditions[0].Temperature));
+    WxConditions[0].FeelsLike   = current["feels_like"];                           dbgPrintln("FLik: " + String(WxConditions[0].FeelsLike));
+    WxConditions[0].Pressure    = current["pressure"];                             dbgPrintln("Pres: " + String(WxConditions[0].Pressure));
+    WxConditions[0].Humidity    = current["humidity"];                             dbgPrintln("Humi: " + String(WxConditions[0].Humidity));
+    WxConditions[0].DewPoint    = current["dew_point"];                            dbgPrintln("DPoi: " + String(WxConditions[0].DewPoint));
+    WxConditions[0].UVI         = current["uvi"];                                  dbgPrintln("UVin: " + String(WxConditions[0].UVI));
+    WxConditions[0].Cloudcover  = current["clouds"];                               dbgPrintln("CCov: " + String(WxConditions[0].Cloudcover));
+    WxConditions[0].Visibility  = current["visibility"];                           dbgPrintln("Visi: " + String(WxConditions[0].Visibility));
+    WxConditions[0].Windspeed   = current["wind_speed"];                           dbgPrintln("WSpd: " + String(WxConditions[0].Windspeed));
+    WxConditions[0].Winddir     = current["wind_deg"];                             dbgPrintln("WDir: " + String(WxConditions[0].Winddir));
     JsonObject current_weather  = current["weather"][0];
     String Description = current_weather["description"];                           // "scattered clouds"
     String Icon        = current_weather["icon"];                                  // "01n"
-    WxConditions[0].Forecast0   = Description;                                     Serial.println("Fore: " + String(WxConditions[0].Forecast0));
-    WxConditions[0].Icon        = Icon;                                            Serial.println("Icon: " + String(WxConditions[0].Icon));
+    WxConditions[0].Forecast0   = Description;                                     dbgPrintln("Fore: " + String(WxConditions[0].Forecast0));
+    WxConditions[0].Icon        = Icon;                                            dbgPrintln("Icon: " + String(WxConditions[0].Icon));
   }  
   if (Type == "forecast") {
     //Serial.println(json);
-    Serial.print(F("\nReceiving Forecast period - ")); //------------------------------------------------
+    dbgPrintln(F("Receiving Forecast period - ")); //------------------------------------------------
     JsonArray list                    = root["list"];
     for (byte r = 0; r < max_readings; r++) {
-      Serial.println("\nPeriod-" + String(r) + "--------------");
+      dbgPrintln("Period-" + String(r) + "--------------");
       WxForecast[r].Dt                = list[r]["dt"].as<int>();
-      WxForecast[r].Temperature       = list[r]["main"]["temp"].as<float>();       Serial.println("Temp: " + String(WxForecast[r].Temperature));
-      WxForecast[r].Low               = list[r]["main"]["temp_min"].as<float>();   Serial.println("TLow: " + String(WxForecast[r].Low));
-      WxForecast[r].High              = list[r]["main"]["temp_max"].as<float>();   Serial.println("THig: " + String(WxForecast[r].High));
-      WxForecast[r].Pressure          = list[r]["main"]["pressure"].as<float>();   Serial.println("Pres: " + String(WxForecast[r].Pressure));
-      WxForecast[r].Humidity          = list[r]["main"]["humidity"].as<float>();   Serial.println("Humi: " + String(WxForecast[r].Humidity));
-      WxForecast[r].Icon              = list[r]["weather"][0]["icon"].as<const char*>(); Serial.println("Icon: " + String(WxForecast[r].Icon));
-      WxForecast[r].Rainfall          = list[r]["rain"]["3h"].as<float>();         Serial.println("Rain: " + String(WxForecast[r].Rainfall));
-      WxForecast[r].Snowfall          = list[r]["snow"]["3h"].as<float>();         Serial.println("Snow: " + String(WxForecast[r].Snowfall));
+      WxForecast[r].Temperature       = list[r]["main"]["temp"].as<float>();       dbgPrintln("Temp: " + String(WxForecast[r].Temperature));
+      WxForecast[r].Low               = list[r]["main"]["temp_min"].as<float>();   dbgPrintln("TLow: " + String(WxForecast[r].Low));
+      WxForecast[r].High              = list[r]["main"]["temp_max"].as<float>();   dbgPrintln("THig: " + String(WxForecast[r].High));
+      WxForecast[r].Pressure          = list[r]["main"]["pressure"].as<float>();   dbgPrintln("Pres: " + String(WxForecast[r].Pressure));
+      WxForecast[r].Humidity          = list[r]["main"]["humidity"].as<float>();   dbgPrintln("Humi: " + String(WxForecast[r].Humidity));
+      WxForecast[r].Icon              = list[r]["weather"][0]["icon"].as<const char*>(); dbgPrintln("Icon: " + String(WxForecast[r].Icon));
+      WxForecast[r].Rainfall          = list[r]["rain"]["3h"].as<float>();         dbgPrintln("Rain: " + String(WxForecast[r].Rainfall));
+      WxForecast[r].Snowfall          = list[r]["snow"]["3h"].as<float>();         dbgPrintln("Snow: " + String(WxForecast[r].Snowfall));
       if (r < 8) { // Check next 3 x 8 Hours = 1 day
         if (WxForecast[r].High > WxConditions[0].High) WxConditions[0].High = WxForecast[r].High; // Get Highest temperature for next 24Hrs
         if (WxForecast[r].Low  < WxConditions[0].Low)  WxConditions[0].Low  = WxForecast[r].Low;  // Get Lowest  temperature for next 24Hrs
@@ -390,7 +514,7 @@ bool obtainWeatherData(WiFiClientSecure & client, const String & RequestType) {
   }
   else
   {
-    Serial.printf("connection failed, error: %s", http.errorToString(httpCode).c_str());
+    dbgPrintln("connection failed, error: %" + http.errorToString(httpCode));
     client.stop();
     http.end();
     return false;
@@ -560,7 +684,7 @@ void DisplayForecastTextSection(int x, int y) {
 
 void DisplayVisiCCoverUVISection(int x, int y) {
   setFont(OpenSans12B);
-  Serial.print("=========================="); Serial.println(WxConditions[0].Visibility);
+  dbgPrintln("==========================" + String(WxConditions[0].Visibility));
   Visibility(x + 5, y, String(WxConditions[0].Visibility) + "M");
   CloudCover(x + 155, y, WxConditions[0].Cloudcover);
   Display_UVIndexLevel(x + 265, y, WxConditions[0].UVI);
@@ -705,7 +829,7 @@ void DisplayGraphSection(int x, int y) {
 }
 
 void DisplayConditionsSection(int x, int y, String IconName, bool IconSize) {
-  Serial.println("Icon name: " + IconName);
+  dbgPrintln("Icon name: " + IconName);
   if      (IconName == "01d" || IconName == "01n") ClearSky(x, y, IconSize, IconName);
   else if (IconName == "02d" || IconName == "02n") FewClouds(x, y, IconSize, IconName);
   else if (IconName == "03d" || IconName == "03n") ScatteredClouds(x, y, IconSize, IconName);
@@ -758,7 +882,7 @@ void DrawPressureAndTrend(int x, int y, float pressure, String slope) {
 void DisplayStatusSection(int x, int y, int rssi) {
   setFont(OpenSans12B);
   DrawRSSI(x + 385, y + 2, rssi);
-  DrawBattery(x + 180, y);
+  DrawBattery(x + 180, y, false);
 }
 
 void DrawRSSI(int x, int y, int rssi) {
@@ -784,17 +908,17 @@ boolean UpdateLocalTime() {
     return false;
   }
   */
-  ESP32Time rtc(0);
 
-  rtc.setTime(datetime_request.response.dt);
-
-  struct tm timeinfo = rtc.getTimeStruct();
+  struct tm timeinfo = *localtime(&datetime_request.response.dt);
 
   CurrentHour = timeinfo.tm_hour;
   CurrentMin  = timeinfo.tm_min;
   CurrentSec  = timeinfo.tm_sec;
   //See http://www.cplusplus.com/reference/ctime/strftime/
-  Serial.println(&timeinfo, "%a %b %d %Y   %H:%M:%S");      // Displays: Saturday, June 24 2017 14:05:49
+  //Serial.println(&timeinfo, "%a %b %d %Y   %H:%M:%S");      // Displays: Saturday, June 24 2017 14:05:49
+  char buffer[30];
+  strftime(buffer, 7, "%a %b %d %Y   %H:%M:%S", &timeinfo);
+  dbgPrintln("UpdateLocalTime: " + String(buffer));
   if (settings.Units == "M") {
     sprintf(day_output, "%s, %02u %s %04u", weekday_D[timeinfo.tm_wday], timeinfo.tm_mday, month_M[timeinfo.tm_mon], (timeinfo.tm_year) + 1900);
     strftime(update_time, sizeof(update_time), "%H:%M:%S", &timeinfo);  // Creates: '@ 14:05:49'   and change from 30 to 8 <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -811,25 +935,30 @@ boolean UpdateLocalTime() {
   return true;
 }
 
-void DrawBattery(int x, int y) {
+uint8_t DrawBattery(int x, int y, bool _skipDraw) {
   uint8_t percentage = 100;
   esp_adc_cal_characteristics_t adc_chars;
   esp_adc_cal_value_t val_type = esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, &adc_chars);
   if (val_type == ESP_ADC_CAL_VAL_EFUSE_VREF) {
-    Serial.printf("eFuse Vref:%u mV", adc_chars.vref);
+    dbgPrintln("eFuse Vref:" + String(adc_chars.vref) + " mV");
     vref = adc_chars.vref;
   }
   float voltage = analogRead(36) / 4096.0 * 6.566 * (vref / 1000.0);
   if (voltage > 1 ) { // Only display if there is a valid reading
-    Serial.println("\nVoltage = " + String(voltage));
+    dbgPrintln("Voltage = " + String(voltage));
     percentage = 2836.9625 * pow(voltage, 4) - 43987.4889 * pow(voltage, 3) + 255233.8134 * pow(voltage, 2) - 656689.7123 * voltage + 632041.7303;
     if (voltage >= 4.20) percentage = 100;
     if (voltage <= 3.20) percentage = 0;  // orig 3.5
+    if (_skipDraw)
+    {
+      return percentage;
+    }
     drawRect(x + 25, y - 14, 40, 15, Black);
     fillRect(x + 65, y - 10, 4, 7, Black);
     fillRect(x + 27, y - 12, 36 * percentage / 100.0, 11, Black);
     drawString(x + 80, y - 17, String(percentage) + "% " + String(voltage, 1) + "v", LEFT);
   }
+  return percentage;
 }
 
 // Symbols are drawn on a relative 10x10grid and 1 scale unit = 1 drawing unit
