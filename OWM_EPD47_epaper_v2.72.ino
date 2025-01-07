@@ -257,9 +257,9 @@ uint8_t StartWiFi() {
   }
   if (WiFi.status() == WL_CONNECTED) {
     wifi_signal = WiFi.RSSI(); // Get Wifi Signal strength now, because the WiFi will be turned off to save power!
-    dbgPrintln("WiFi connected at: " + WiFi.localIP().toString());
+    infoPrintln("WiFi connected at: " + WiFi.localIP().toString());
   }
-  else dbgPrintln("WiFi connection *** FAILED ***");
+  else infoPrintln("WiFi connection *** FAILED ***");
   return WiFi.status();
 }
 
@@ -356,7 +356,7 @@ void request_render_weather(bool _clearDisplay)
   bool RxForecast = false;
   bool RxAqidata = false;
 
-  dbgPrintln("Request_render_weather");
+  infoPrintln("Request and render weather");
 
   if (_clearDisplay)
   {
@@ -376,6 +376,7 @@ void request_render_weather(bool _clearDisplay)
   }
   dbgPrintln("Received all weather data...");
   if (RxWeather && RxForecast && RxAqidata) { // Only if received both Weather or Forecast proceed
+    collectAndWriteLog(OPERATING_MODE, true, RxWeather, RxAqidata);
     StopWiFi();         // Reduces power consumption
     epd_poweron();      // Switch on EPD display
     epd_clear();        // Clear the screen
@@ -383,8 +384,11 @@ void request_render_weather(bool _clearDisplay)
     edp_update();       // Update the display to show the information
     epd_poweroff_all(); // Switch off all power to EPD
   }
-
-  collectAndWriteLog(OPERATING_MODE, true, RxWeather, RxAqidata);
+  else if (WiFi.status() == WL_CONNECTED)
+  {
+    collectAndWriteLog(OPERATING_MODE, true, RxWeather, RxAqidata);
+    StopWiFi();         // Reduces power consumption
+  }
 }
 
 void Convert_Readings_to_Imperial() { // Only the first 3-hours are used

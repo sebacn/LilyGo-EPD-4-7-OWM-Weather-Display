@@ -430,8 +430,7 @@ void wakeup_reason() {
     wakeup_reason = esp_sleep_get_wakeup_cause();
 
     dbgPrintln("CPU0 reset reason: " + print_reset_reason(rtc_get_reset_reason(0)));
-    dbgPrintln("CPU1 reset reason: " + print_reset_reason(rtc_get_reset_reason(1)));
-    dbgPrintln("");
+    dbgPrintln("CPU1 reset reason: " + print_reset_reason(rtc_get_reset_reason(1)) + "\n");
     
     switch(wakeup_reason){
         //dbgPrintln("Location variable: " + String(curr_loc));
@@ -590,7 +589,7 @@ void run_config_server() {
 
     dnsStarted = dnsServer.start(53, "*", WiFi.softAPIP());
     
-    infoPrintln("");
+    Serial.println("");
     infoPrintln("Start config server on ssid: " + network + ", pass: " + pass + ", ip: " + WiFi.softAPIP().toString() + "\n");
 
     display_config_mode(network, pass, WiFi.softAPIP().toString());
@@ -889,6 +888,7 @@ void run_validating_mode() {
     display_print_text(OpenSans12B, 15, 170, "Validation OK!\nReboot to operating mode....");
     delay(3000);
 
+    infoPrintln("Validation OK! Start operating mode...");
     if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
         request_render_weather(true);
     }
