@@ -57,11 +57,12 @@ void edp_update();
 void setFont(GFXfont const & font);
 boolean SetupTime();
 void request_render_weather(bool _clearDisplay = false);
-void BeginSleep(bool _timeIsSet, int _failed_cnt);
+void BeginSleep(bool _timeIsSet);
 //boolean UpdateLocalTime();
 //extern bool DecodeWeather(WiFiClient& json, String Type);
 void DisplayStatusSection(int x, int y, int rssi);
 void collectAndWriteLog(int mode, bool is_time_fetched, bool is_weather_fetched, bool is_aq_fetched);
+int failed_count(bool _reset);
 
 template<typename T>
 T value_or_default(JsonObject jobj, String key, T default_value) {
@@ -559,9 +560,10 @@ void display_config_mode(String network, String pass, String ip) {
     epd_poweroff_all(); // Switch off all power to EPD
 }
 
-void display_operating_mode_failed(int failed_wifi_count) {
+void display_faild_mode_sleep() {
   
-    TimeSpan ts = TimeSpan(0, 0, ((int)powf(failed_wifi_count, 3))+1, 0);
+    int fail_cnt = failed_count(false);
+    TimeSpan ts = TimeSpan((uint32_t)powf(fail_cnt, 3) * 60);
 
     epd_poweron();      // Switch on EPD display
     epd_clear();        // Clear the screen
@@ -572,7 +574,7 @@ void display_operating_mode_failed(int failed_wifi_count) {
     drawString(15, 110, "Operationg mode..", LEFT);
     setFont(OpenSans12B);
     drawString(15, 170, "Failed connect to wifi: " + settings.WiFiSSID + "...\nFailed retries: " 
-        + String(failed_wifi_count) + "\nNext WakeUp in " 
+        + String(fail_cnt) + "\nNext WakeUp in " 
         + String(ts.days()) + " days "
         + String(ts.hours()) + " hours " 
         + String(ts.minutes()) + " minutes", LEFT);
@@ -581,6 +583,15 @@ void display_operating_mode_failed(int failed_wifi_count) {
 
     edp_update();       // Update the display to show the information
     epd_poweroff_all(); // Switch off all power to EPD
+      
+    infoPrintln("DateTime not set, wake up in " 
+        + String(ts.days()) + " days "
+        + String(ts.hours()) + " hours "
+        + String(ts.minutes()) + " minutes (" + String(ts.totalseconds()) + ")");
+
+    esp_sleep_enable_timer_wakeup(((uint64_t)ts.totalseconds())*1000000L);
+
+    esp_deep_sleep_start(); 
 }
 
 void display_print_text(GFXfont const & font, int _x, int _y, String _str, bool _clear = false) {
@@ -605,7 +616,7 @@ void run_config_server() {
     String pass = String(abs((int)esp_random())).substring(0, 4) + "0000";
 
     print_pt();
-
+    failed_count(true);
     read_config_from_memory();
 
     IPAddress localIp(192, 168, 4, 1);
@@ -733,7 +744,7 @@ void run_config_server() {
             if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
                 collectAndWriteLog(CONFIG_MODE, true, false, false);
                 request_render_weather(true);
-                BeginSleep(true, 0);
+                BeginSleep(true);
             }
         }
         else
@@ -916,10 +927,10 @@ void run_validating_mode() {
     infoPrintln("Validation OK! Start operating mode...");
     if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
         request_render_weather(true);
-        BeginSleep(true, 1);
+        BeginSleep(true);
     }
 
-    BeginSleep(false, 1);
+    BeginSleep(false);
     delay(15000);
     dbgPrintln("Deep sleep..");
 
@@ -1007,7 +1018,7 @@ int get_mode() {
     return mode;
 }
 
-int get_failed_count(bool _reset) {
+int failed_count(bool _reset) {
 
     int ret;
     dbgPrintln("get_failed_count");

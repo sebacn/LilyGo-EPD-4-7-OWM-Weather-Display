@@ -113,7 +113,7 @@ extern LogInfo logInfo;
 void run_operating_mode();
 void DisplayAirQualitySection(int x, int y);
 String dbgPrintln(String _str);
-void display_operating_mode_failed(int failed_wifi_count);
+void display_faild_mode_sleep();
 
 void collectAndWriteLog(int mode, bool is_time_fetched, bool is_weather_fetched, bool is_aq_fetched)
 {
@@ -131,14 +131,15 @@ void collectAndWriteLog(int mode, bool is_time_fetched, bool is_weather_fetched,
     writeLogInfo();
 }
 
-void enable_timed_sleep(int interval_minutes, bool _timeIsSet, int failed_count) {
+void enable_timed_sleep(int interval_minutes, bool _timeIsSet) {
     // sleep and wake up round minutes, ex every 15 mins
     // will wake up at 7:15, 7:30, 7:45 etc.
     dbgPrintln("enable_timed_sleep (MIN): " + String(interval_minutes));
 
     if (_timeIsSet == false)
     {
-      TimeSpan ts = TimeSpan(0, 0, ((int)powf(failed_count, 3))+1, 0);
+      int fail_cnt = failed_count(false);
+      TimeSpan ts = TimeSpan((uint32_t)powf(fail_cnt, 3) * 60);
       
       infoPrintln("DateTime not set, wake up in " 
         + String(ts.days()) + " days "
@@ -221,7 +222,7 @@ void enable_timed_sleep(int interval_minutes, bool _timeIsSet, int failed_count)
     esp_sleep_enable_timer_wakeup((uint64_t)sleep_time_seconds*1000000L);
 }
 
-void BeginSleep(bool _timeIsSet, int _failed_cnt) {
+void BeginSleep(bool _timeIsSet) {
   epd_poweroff_all();
 
   if (_timeIsSet)
@@ -238,7 +239,7 @@ void BeginSleep(bool _timeIsSet, int _failed_cnt) {
   Serial.println("Starting deep-sleep period...");
   */
 
-  enable_timed_sleep(settings.SleepDuration, _timeIsSet, _failed_cnt);
+  enable_timed_sleep(settings.SleepDuration, _timeIsSet);
 
   esp_deep_sleep_start();  // Sleep for e.g. 30 minutes
 }
@@ -348,7 +349,7 @@ void setup() {
 }
 
 void run_operating_mode() {
-    int failed_cnt;
+
     read_config_from_memory();
     //wakeup_reason();
  
@@ -364,16 +365,15 @@ void run_operating_mode() {
        request_render_weather(false);
       }
 
-      get_failed_count(true);
-      BeginSleep(true, 1);
+      failed_count(true);
+      BeginSleep(true);
     }
     else
     {
-      failed_cnt = get_failed_count(false);
-      display_operating_mode_failed(failed_cnt);
+      display_faild_mode_sleep();
     }
   
-    BeginSleep(false, failed_cnt);
+    BeginSleep(false);
 }
 
 void request_render_weather(bool _clearDisplay)
