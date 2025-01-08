@@ -6,6 +6,7 @@
 #include <Preferences.h>
 #include <WiFiManager.h> 
 #include <rom/rtc.h> 
+#include <qrcode.h>
 #include "owm_credentials.h"
 #include "epd_driver.h"  
 #include "api_request.h" 
@@ -49,6 +50,8 @@ Settings settings;
 struct GeocodingNominatimRequest location_request;
 struct TimeZoneDbRequest datetime_request;
 struct WeatherRequest weather_request;
+// The structure to manage the QR code
+QRCode qrcode;
 
 int get_mode();
 extern int drawString(int x, int y, String text, alignment align);
@@ -66,6 +69,8 @@ void BeginSleep(bool _timeIsSet);
 void DisplayStatusSection(int x, int y, int rssi);
 void collectAndWriteLog(int mode, bool is_time_fetched, bool is_weather_fetched, bool is_aq_fetched);
 int failed_count(bool _reset);
+void drawRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
+void fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
 
 template<typename T>
 T value_or_default(JsonObject jobj, String key, T default_value) {
@@ -546,7 +551,16 @@ void display_validating_mode() {
 }
 
 void display_config_mode(String network, String pass, String ip) {
-  
+
+    // Allocate a chunk of memory to store the QR code
+    //uint8_t qrcodeBytes[qrcode_getBufferSize(3)];
+    #define QR_VERSION 5
+    #define QR_PXSIZE 5
+    uint8_t *buffer_p = (uint8_t*)malloc(sizeof(uint8_t)*qrcode_getBufferSize(QR_VERSION));
+
+    qrcode_initText(&qrcode, buffer_p, QR_VERSION, ECC_MEDIUM, 
+        String("WIFI:S:" + network + ";T:WPA;P:" + pass + ";;").c_str());       
+
     epd_poweron();      // Switch on EPD display
     epd_clear();        // Clear the screen
 
@@ -562,8 +576,18 @@ void display_config_mode(String network, String pass, String ip) {
     Rect_t area = {.x = 500, .y = 150, .width  = wifi_cfg_width, .height = wifi_cfg_height};
     epd_draw_grayscale_image(area, (uint8_t *) wifi_cfg_data);
 
+    //draw wifi qr code
+    for (uint8_t y = 0; y < qrcode.size; y++) {
+        for (uint8_t x = 0; x < qrcode.size; x++) {
+            fillRect(15 + x*QR_PXSIZE, 340 + y*QR_PXSIZE, QR_PXSIZE, QR_PXSIZE, qrcode_getModule(&qrcode, x, y)? 0x00 : 0xFF);
+        }
+    }
+
     edp_update();       // Update the display to show the information
     epd_poweroff_all(); // Switch off all power to EPD
+
+    // You must free it up after you've finished with it, else the memory will persist, ie ...
+    free(buffer_p);
 }
 
 void display_faild_mode_and_sleep() {
@@ -716,7 +740,7 @@ void run_config_server() {
     {
         dbgPrintln("Config: WiFi manager exit..");
 
-        display_print_text(OpenSans12B, 15, 400, "WiFi manager exit..");
+        display_print_text(OpenSans12B, 250, 400, "WiFi manager exit..");
         delay(2000);
 
         if (shouldSaveConfig)
@@ -747,7 +771,7 @@ void run_config_server() {
         if (configOk)
         {
             set_mode(OPERATING_MODE);
-            display_print_text(OpenSans12B, 15, 420, "Restarting to operation mode (config Ok)..");
+            display_print_text(OpenSans12B, 250, 430, "Restarting to operation mode (config Ok)..");
             delay(2000);
 
             if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
@@ -759,7 +783,7 @@ void run_config_server() {
         else
         {
             set_mode(VALIDATING_MODE);
-            display_print_text(OpenSans12B, 15, 420, "Restarting to validation mode..");
+            display_print_text(OpenSans12B, 250, 430, "Restarting to validation mode..");
         } 
 
         delay(3000);
