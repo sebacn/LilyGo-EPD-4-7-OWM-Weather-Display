@@ -11,6 +11,7 @@
 #include "api_request.h" 
 #include <ArduinoJson.h> 
 #include <HTTPClient.h>
+#include <RTClib.h>
 #include "units.h"
 #include "aqi_metric.h"
 #include "loginfo.h"
@@ -56,7 +57,7 @@ void edp_update();
 void setFont(GFXfont const & font);
 boolean SetupTime();
 void request_render_weather(bool _clearDisplay = false);
-void BeginSleep();
+void BeginSleep(bool _timeIsSet, int _failed_cnt);
 //boolean UpdateLocalTime();
 //extern bool DecodeWeather(WiFiClient& json, String Type);
 void DisplayStatusSection(int x, int y, int rssi);
@@ -558,6 +559,30 @@ void display_config_mode(String network, String pass, String ip) {
     epd_poweroff_all(); // Switch off all power to EPD
 }
 
+void display_operating_mode_failed(int failed_wifi_count) {
+  
+    TimeSpan ts = TimeSpan(0, 0, ((int)powf(failed_wifi_count, 3))+1, 0);
+
+    epd_poweron();      // Switch on EPD display
+    epd_clear();        // Clear the screen
+
+    setFont(OpenSans24B);
+    drawString(250, 25, "LilyGo T5 4.7 EPD47", LEFT);
+    setFont(OpenSans18B);
+    drawString(15, 110, "Operationg mode..", LEFT);
+    setFont(OpenSans12B);
+    drawString(15, 170, "Failed connect to wifi: " + settings.WiFiSSID + "...\nFailed retries: " 
+        + String(failed_wifi_count) + "\nNext WakeUp in " 
+        + String(ts.days()) + " days "
+        + String(ts.hours()) + " hours " 
+        + String(ts.minutes()) + " minutes", LEFT);
+
+    DisplayStatusSection(575, 25, -100); 
+
+    edp_update();       // Update the display to show the information
+    epd_poweroff_all(); // Switch off all power to EPD
+}
+
 void display_print_text(GFXfont const & font, int _x, int _y, String _str, bool _clear = false) {
   
     epd_poweron();      // Switch on EPD display
@@ -671,7 +696,7 @@ void run_config_server() {
     {
         dbgPrintln("Config: WiFi manager exit..");
 
-        display_print_text(OpenSans12B, 15, 330, "Wifi connected OK!");
+        display_print_text(OpenSans12B, 15, 330, "WiFi manager exit..");
         delay(2000);
 
         if (shouldSaveConfig)
@@ -708,7 +733,7 @@ void run_config_server() {
             if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
                 collectAndWriteLog(CONFIG_MODE, true, false, false);
                 request_render_weather(true);
-                BeginSleep();
+                BeginSleep(true, 0);
             }
         }
         else
@@ -891,9 +916,10 @@ void run_validating_mode() {
     infoPrintln("Validation OK! Start operating mode...");
     if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
         request_render_weather(true);
+        BeginSleep(true, 1);
     }
-    BeginSleep();
 
+    BeginSleep(false, 1);
     delay(15000);
     dbgPrintln("Deep sleep..");
 
@@ -979,6 +1005,24 @@ int get_mode() {
     dbgPrintln("Config OK: " + String(configOk) + ", Mode: " + String(mode));
 
     return mode;
+}
+
+int get_failed_count(bool _reset) {
+
+    int ret;
+    dbgPrintln("get_failed_count");
+
+    preferences.begin("boot_var", false);
+    ret = preferences.getInt("failed_count", 0); 
+    ret++;
+    if (_reset)
+    {
+        ret = 0;
+    }
+    preferences.putInt("failed_count", ret);
+    preferences.end();
+
+    return ret;
 }
 
 

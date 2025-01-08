@@ -113,6 +113,7 @@ extern LogInfo logInfo;
 void run_operating_mode();
 void DisplayAirQualitySection(int x, int y);
 String dbgPrintln(String _str);
+void display_operating_mode_failed(int failed_wifi_count);
 
 void collectAndWriteLog(int mode, bool is_time_fetched, bool is_weather_fetched, bool is_aq_fetched)
 {
@@ -130,10 +131,24 @@ void collectAndWriteLog(int mode, bool is_time_fetched, bool is_weather_fetched,
     writeLogInfo();
 }
 
-void enable_timed_sleep(int interval_minutes) {
+void enable_timed_sleep(int interval_minutes, bool _timeIsSet, int failed_count) {
     // sleep and wake up round minutes, ex every 15 mins
     // will wake up at 7:15, 7:30, 7:45 etc.
     dbgPrintln("enable_timed_sleep (MIN): " + String(interval_minutes));
+
+    if (_timeIsSet == false)
+    {
+      TimeSpan ts = TimeSpan(0, 0, ((int)powf(failed_count, 3))+1, 0);
+      
+      infoPrintln("DateTime not set, wake up in " 
+        + String(ts.days()) + " days "
+        + String(ts.hours()) + " hours "
+        + String(ts.minutes()) + " minutes (" + String(ts.totalseconds()) + ")");
+
+      esp_sleep_enable_timer_wakeup(((uint64_t)ts.totalseconds())*1000000L);
+
+      return;
+    }
 
     DateTime curTime = DateTime(datetime_request.response.dt);
     DateTime newTime;
@@ -200,15 +215,20 @@ void enable_timed_sleep(int interval_minutes) {
     sprintf(buffer, "%d hours, %d minutes and %d seconds (total sec: %d)\n", ts.hours(), ts.minutes(), ts.seconds(), sleep_time_seconds);
     infoPrintln("DateTime Sleep for " + String(buffer));
 
-    uint64_t sleep_time_micro_sec = sleep_time_seconds;
-    sleep_time_micro_sec = sleep_time_micro_sec * 1000 * 1000;
+    //sleep_time_micro_sec = sleep_time_seconds;
+    //sleep_time_micro_sec = sleep_time_micro_sec * 1000 * 1000;
 
-    esp_sleep_enable_timer_wakeup(sleep_time_micro_sec);
+    esp_sleep_enable_timer_wakeup((uint64_t)sleep_time_seconds*1000000L);
 }
 
-void BeginSleep() {
+void BeginSleep(bool _timeIsSet, int _failed_cnt) {
   epd_poweroff_all();
-  UpdateLocalTime();
+
+  if (_timeIsSet)
+  {
+    UpdateLocalTime();
+  }
+ 
 
 /*
   SleepTimer = (settings.SleepDuration * 60 - ((CurrentMin % settings.SleepDuration) * 60 + CurrentSec)) + Delta; //Some ESP32 have a RTC that is too fast to maintain accurate time, so add an offset
@@ -218,7 +238,7 @@ void BeginSleep() {
   Serial.println("Starting deep-sleep period...");
   */
 
-  enable_timed_sleep(settings.SleepDuration);
+  enable_timed_sleep(settings.SleepDuration, _timeIsSet, _failed_cnt);
 
   esp_deep_sleep_start();  // Sleep for e.g. 30 minutes
 }
@@ -328,25 +348,32 @@ void setup() {
 }
 
 void run_operating_mode() {
-
+    int failed_cnt;
     read_config_from_memory();
-    //curr_loc = read_location_from_memory();
     //wakeup_reason();
-
-    //if (connect_to_wifi()) {
  
     if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
       bool WakeUp = false;
+
       if (settings.WakeupHour > settings.SleepHour)
         WakeUp = (CurrentHour >= settings.WakeupHour || CurrentHour <= settings.SleepHour);
       else
         WakeUp = (CurrentHour >= settings.WakeupHour && CurrentHour <= settings.SleepHour);
+
       if (WakeUp) {
        request_render_weather(false);
       }
+
+      get_failed_count(true);
+      BeginSleep(true, 1);
+    }
+    else
+    {
+      failed_cnt = get_failed_count(false);
+      display_operating_mode_failed(failed_cnt);
     }
   
-    BeginSleep();
+    BeginSleep(false, failed_cnt);
 }
 
 void request_render_weather(bool _clearDisplay)
@@ -374,20 +401,17 @@ void request_render_weather(bool _clearDisplay)
     if (RxAqidata == false) RxAqidata = obtainWeatherData(client, "air_pollution");
     Attempts++;
   }
+
+  collectAndWriteLog(OPERATING_MODE, true, RxWeather, RxAqidata);
+  StopWiFi();         // Reduces power consumption
+
   dbgPrintln("Received all weather data...");
   if (RxWeather && RxForecast && RxAqidata) { // Only if received both Weather or Forecast proceed
-    collectAndWriteLog(OPERATING_MODE, true, RxWeather, RxAqidata);
-    StopWiFi();         // Reduces power consumption
     epd_poweron();      // Switch on EPD display
     epd_clear();        // Clear the screen
     DisplayWeather();   // Display the weather data
     edp_update();       // Update the display to show the information
     epd_poweroff_all(); // Switch off all power to EPD
-  }
-  else if (WiFi.status() == WL_CONNECTED)
-  {
-    collectAndWriteLog(OPERATING_MODE, true, RxWeather, RxAqidata);
-    StopWiFi();         // Reduces power consumption
   }
 }
 
