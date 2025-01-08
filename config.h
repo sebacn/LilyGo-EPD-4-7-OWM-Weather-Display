@@ -21,6 +21,9 @@
 #include "fonts/opensans12b.h"
 #include "fonts/opensans18b.h"
 #include "fonts/opensans24b.h"
+//#include "imgs/wifi_icon.h"
+#include "imgs/wifi_nook.h"
+#include "imgs/wifi_cfg.h"
 
 #define MEMORY_ID "mem"
 
@@ -548,19 +551,22 @@ void display_config_mode(String network, String pass, String ip) {
     epd_clear();        // Clear the screen
 
     setFont(OpenSans24B);
-    drawString(250, 25, "LilyGo T5 4.7 EPD47", LEFT);
+    drawString(250, 30, "LilyGo T5 4.7 EPD47", LEFT);
     setFont(OpenSans18B);
-    drawString(15, 110, "WiFi Configuration..", LEFT);
+    drawString(15, 130, "WiFi Configuration..", LEFT);
     setFont(OpenSans12B);
-    drawString(15, 170, "Connect to weather station...\nSSID: " + network + "\nPass: " + pass + "\nURL: http://" + ip , LEFT);
+    drawString(15, 200, "Connect to weather station...\nSSID: " + network + "\nPass: " + pass + "\nURL: http://" + ip , LEFT);
 
     DisplayStatusSection(575, 25, -100); 
+
+    Rect_t area = {.x = 500, .y = 150, .width  = wifi_cfg_width, .height = wifi_cfg_height};
+    epd_draw_grayscale_image(area, (uint8_t *) wifi_cfg_data);
 
     edp_update();       // Update the display to show the information
     epd_poweroff_all(); // Switch off all power to EPD
 }
 
-void display_faild_mode_sleep() {
+void display_faild_mode_and_sleep() {
   
     int fail_cnt = failed_count(false);
     TimeSpan ts = TimeSpan((uint32_t)powf(fail_cnt, 3) * 60);
@@ -569,17 +575,20 @@ void display_faild_mode_sleep() {
     epd_clear();        // Clear the screen
 
     setFont(OpenSans24B);
-    drawString(250, 25, "LilyGo T5 4.7 EPD47", LEFT);
+    drawString(250, 30, "LilyGo T5 4.7 EPD47", LEFT);
     setFont(OpenSans18B);
-    drawString(15, 110, "Operationg mode..", LEFT);
+    drawString(15, 130, "Connect to WiFi failed..", LEFT);
     setFont(OpenSans12B);
-    drawString(15, 170, "Failed connect to wifi: " + settings.WiFiSSID + "...\nFailed retries: " 
+    drawString(15, 300, "Failed connect to wifi: " + settings.WiFiSSID + "\nFailed retries: " 
         + String(fail_cnt) + "\nNext WakeUp in " 
         + String(ts.days()) + " days "
         + String(ts.hours()) + " hours " 
         + String(ts.minutes()) + " minutes", LEFT);
 
     DisplayStatusSection(575, 25, -100); 
+
+    Rect_t area = {.x = 500, .y = 150, .width  = wifi_nook_width, .height = wifi_nook_height};
+    epd_draw_grayscale_image(area, (uint8_t *) wifi_nook_data);
 
     edp_update();       // Update the display to show the information
     epd_poweroff_all(); // Switch off all power to EPD
@@ -707,7 +716,7 @@ void run_config_server() {
     {
         dbgPrintln("Config: WiFi manager exit..");
 
-        display_print_text(OpenSans12B, 15, 330, "WiFi manager exit..");
+        display_print_text(OpenSans12B, 15, 400, "WiFi manager exit..");
         delay(2000);
 
         if (shouldSaveConfig)
@@ -738,7 +747,7 @@ void run_config_server() {
         if (configOk)
         {
             set_mode(OPERATING_MODE);
-            display_print_text(OpenSans12B, 15, 350, "Restarting to operation mode (config Ok)..");
+            display_print_text(OpenSans12B, 15, 420, "Restarting to operation mode (config Ok)..");
             delay(2000);
 
             if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
@@ -750,7 +759,7 @@ void run_config_server() {
         else
         {
             set_mode(VALIDATING_MODE);
-            display_print_text(OpenSans12B, 15, 350, "Restarting to validation mode..");
+            display_print_text(OpenSans12B, 15, 420, "Restarting to validation mode..");
         } 
 
         delay(3000);

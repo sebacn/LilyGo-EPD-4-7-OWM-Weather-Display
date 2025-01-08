@@ -113,7 +113,7 @@ extern LogInfo logInfo;
 void run_operating_mode();
 void DisplayAirQualitySection(int x, int y);
 String dbgPrintln(String _str);
-void display_faild_mode_sleep();
+void display_faild_mode_and_sleep();
 
 void collectAndWriteLog(int mode, bool is_time_fetched, bool is_weather_fetched, bool is_aq_fetched)
 {
@@ -370,7 +370,7 @@ void run_operating_mode() {
     }
     else
     {
-      display_faild_mode_sleep();
+      display_faild_mode_and_sleep();
     }
   
     BeginSleep(false);
