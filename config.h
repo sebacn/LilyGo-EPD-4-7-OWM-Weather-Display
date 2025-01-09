@@ -569,17 +569,18 @@ void display_config_mode(String network, String pass, String ip) {
     setFont(OpenSans18B);
     drawString(15, 130, "WiFi Configuration..", LEFT);
     setFont(OpenSans12B);
-    drawString(15, 200, "Connect to weather station...\nSSID: " + network + "\nPass: " + pass + "\nURL: http://" + ip , LEFT);
+    drawString(15, 200, "Scan QR code to WiFi connect", LEFT);
+    drawString(230, 230, "Connection parameters:\nSSID: " + network + "\nPass: " + pass + "\nURL: http://" + ip , LEFT);
 
     DisplayStatusSection(575, 25, -100); 
 
-    Rect_t area = {.x = 500, .y = 150, .width  = wifi_cfg_width, .height = wifi_cfg_height};
+    Rect_t area = {.x = 600, .y = 150, .width  = wifi_cfg_width, .height = wifi_cfg_height};
     epd_draw_grayscale_image(area, (uint8_t *) wifi_cfg_data);
 
     //draw wifi qr code
     for (uint8_t y = 0; y < qrcode.size; y++) {
         for (uint8_t x = 0; x < qrcode.size; x++) {
-            fillRect(15 + x*QR_PXSIZE, 340 + y*QR_PXSIZE, QR_PXSIZE, QR_PXSIZE, qrcode_getModule(&qrcode, x, y)? 0x00 : 0xFF);
+            fillRect(15 + x*QR_PXSIZE, 240 + y*QR_PXSIZE, QR_PXSIZE, QR_PXSIZE, qrcode_getModule(&qrcode, x, y)? 0x00 : 0xFF);
         }
     }
 
@@ -740,7 +741,7 @@ void run_config_server() {
     {
         dbgPrintln("Config: WiFi manager exit..");
 
-        display_print_text(OpenSans12B, 250, 400, "WiFi manager exit..");
+        display_print_text(OpenSans12B, 230, 400, "WiFi manager exit..");
         delay(2000);
 
         if (shouldSaveConfig)
@@ -771,7 +772,7 @@ void run_config_server() {
         if (configOk)
         {
             set_mode(OPERATING_MODE);
-            display_print_text(OpenSans12B, 250, 430, "Restarting to operation mode (config Ok)..");
+            display_print_text(OpenSans12B, 230, 430, "Restarting to operation mode (config Ok)..");
             delay(2000);
 
             if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
@@ -783,7 +784,7 @@ void run_config_server() {
         else
         {
             set_mode(VALIDATING_MODE);
-            display_print_text(OpenSans12B, 250, 430, "Restarting to validation mode..");
+            display_print_text(OpenSans12B, 230, 430, "Restarting to validation mode..");
         } 
 
         delay(3000);
