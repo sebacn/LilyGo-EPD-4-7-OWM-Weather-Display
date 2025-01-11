@@ -130,7 +130,7 @@ void print_pt()
 
 String dbgPrintln(String _str) {
     #if defined(PROJ_DEBUG_ENABLE)
-    if (settings.DbgLogEnable)
+    if (true) //settings.DbgLogEnable)
     {
         Serial.printf("%.03f ",millis()/1000.0f); Serial.println("[D] " + _str);
     }    
@@ -706,6 +706,8 @@ void run_config_server() {
 
     bool res = wm.startConfigPortal(network.c_str(), pass.c_str());
 
+    detachInterrupt(digitalPinToInterrupt(GPIO_NUM_39));
+
     if (!res && !configOk) {
 
         dbgPrintln("Config: WiFi timeout..");
@@ -744,7 +746,6 @@ void run_config_server() {
         dbgPrintln("Config: WiFi manager exit..");
 
         display_print_text(OpenSans12B, 230, 400, "WiFi manager exit..");
-        //delay(2000);
 
         if (shouldSaveConfig)
         {

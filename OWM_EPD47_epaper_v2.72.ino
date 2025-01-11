@@ -320,6 +320,7 @@ void loop() {
 
 void run_imgdraw_mode()
 {
+    #define WAKEUP_GPIO GPIO_NUM_39
     int img_idx;
     const uint8_t *img_data[3] = {ImgCat_data, ImgLandscape_data, ImgMinion_data};
 
@@ -339,17 +340,26 @@ void run_imgdraw_mode()
     edp_update();       // Update the display to show the information
     epd_poweroff_all(); // Switch off all power to EPD
 
+/*
+    esp_sleep_enable_ext0_wakeup(WAKEUP_GPIO, 0);  //1 = High, 0 = Low
+    // Configure pullup/downs via RTCIO to tie wakeup pins to inactive level during deepsleep.
+    // EXT0 resides in the same power domain (RTC_PERIPH) as the RTC IO pullup/downs.
+    // No need to keep that power domain explicitly, unlike EXT1.
+    rtc_gpio_pulldown_dis(WAKEUP_GPIO);
+    rtc_gpio_pullup_en(WAKEUP_GPIO); 
     //esp_sleep_enable_timer_wakeup(((uint64_t)600)*1000000L); //10min
+    */
+
     esp_deep_sleep_start();
 }
 
 void IRAM_ATTR btn39Click(void)
 {
+    dbgPrintln("btn39Click");
     set_mode_and_reboot(IMGDRAW_MODE);
 }
 
 void setup() {
-
   #define WAKEUP_GPIO GPIO_NUM_39
 
   InitialiseSystem();
@@ -360,15 +370,11 @@ void setup() {
 
   dbgPrintln("\n\n=== WEATHER STATION ===\n\n");
   //init_display();
-  wakeup_reason();
+  wakeup_reason(); 
 
-  esp_sleep_enable_ext0_wakeup(WAKEUP_GPIO, 0);  //1 = High, 0 = Low
-  // Configure pullup/downs via RTCIO to tie wakeup pins to inactive level during deepsleep.
-  // EXT0 resides in the same power domain (RTC_PERIPH) as the RTC IO pullup/downs.
-  // No need to keep that power domain explicitly, unlike EXT1.
+  esp_sleep_enable_ext0_wakeup(WAKEUP_GPIO, 0);
   rtc_gpio_pulldown_dis(WAKEUP_GPIO);
-  rtc_gpio_pullup_en(WAKEUP_GPIO);  
-
+  rtc_gpio_pullup_en(WAKEUP_GPIO); 
   attachInterrupt(digitalPinToInterrupt(WAKEUP_GPIO), btn39Click, FALLING);
 
   switch (get_mode())
