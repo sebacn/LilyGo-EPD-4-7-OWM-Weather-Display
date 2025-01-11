@@ -353,14 +353,7 @@ void run_imgdraw_mode()
     esp_deep_sleep_start();
 }
 
-void IRAM_ATTR btn39Click(void)
-{
-    dbgPrintln("btn39Click");
-    set_mode_and_reboot(IMGDRAW_MODE);
-}
-
 void setup() {
-  #define WAKEUP_GPIO GPIO_NUM_39
 
   InitialiseSystem();
 
@@ -372,15 +365,14 @@ void setup() {
   //init_display();
   wakeup_reason(); 
 
-  esp_sleep_enable_ext0_wakeup(WAKEUP_GPIO, 0);
-  rtc_gpio_pulldown_dis(WAKEUP_GPIO);
-  rtc_gpio_pullup_en(WAKEUP_GPIO); 
-  attachInterrupt(digitalPinToInterrupt(WAKEUP_GPIO), btn39Click, FALLING);
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_39, 0);
+  rtc_gpio_pulldown_dis(GPIO_NUM_39);
+  rtc_gpio_pullup_en(GPIO_NUM_39);   
 
   switch (get_mode())
   {
     case CONFIG_MODE:
-      dbgPrintln("MODE: Config");
+      dbgPrintln("MODE: Config");      
       run_config_server();
       break;
 
@@ -1052,6 +1044,7 @@ void DrawBattery(int x, int y, bool _skipDraw) {
     {
       logInfo.BatteryPct = percentage;
       logInfo.BatteryVoltage = voltage;
+      logInfo.BatteryVref = vref;
       return;
     }
     y -= 3;

@@ -25,12 +25,10 @@ constexpr char const *ROOT_CA_INFLUXDB = ROOT_CA_POSITIONSTACK;
 
 const char MTLS_CERT[] PROGMEM =  R"EOF(
 -----BEGIN CERTIFICATE-----
-TODO: SET CERTIFICATE HERE
 -----END CERTIFICATE-----)EOF";
 
 const char MTLS_PKEY[] PROGMEM =  R"EOF(
 -----BEGIN PRIVATE KEY-----
-TODO: SET PRIVATE KEY HERE
 -----END PRIVATE KEY-----)EOF";
 
 struct LogSettings {
@@ -58,6 +56,7 @@ struct LogInfo {
     long UTCTimestamp;
     int BatteryPct;
     float BatteryVoltage;
+    int BatteryVref;
     bool ConfigOk;
     int Mode;
     bool TimeFetchOk; 
@@ -127,7 +126,8 @@ void writeLogInfo(){
     
     pointDevice.addField("DEV_BootCnt", logInfo.BootCount);
     pointDevice.addField("DEV_BatteryPct", logInfo.BatteryPct);
-    pointDevice.addField("DEV_BatteryVoltage", logInfo.BatteryVoltage);    
+    pointDevice.addField("DEV_BatteryVoltage", logInfo.BatteryVoltage);   
+    pointDevice.addField("DEV_BatteryVref", logInfo.BatteryVref); 
 
     if (logInfo.WeatherFetchOk)
     {

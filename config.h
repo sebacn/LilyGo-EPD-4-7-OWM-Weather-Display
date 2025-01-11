@@ -646,6 +646,12 @@ void display_print_text(GFXfont const & font, int _x, int _y, String _str, bool 
     epd_poweroff_all(); // Switch off all power to EPD
 }
 
+void IRAM_ATTR btn39Click(void)
+{
+    dbgPrintln("btn39Click");
+    set_mode_and_reboot(IMGDRAW_MODE);
+}
+
 void run_config_server() {
     struct tm timeinfo;
     String network = "LilyGo-T5-4.7-weather-wifi";
@@ -703,6 +709,8 @@ void run_config_server() {
     //wm.setTimeout(120);
     wm.setConfigPortalTimeout(60*5); //5 min
     wm.setSaveConfigCallback(saveConfigCallback);
+
+    attachInterrupt(digitalPinToInterrupt(GPIO_NUM_39), btn39Click, FALLING);
 
     bool res = wm.startConfigPortal(network.c_str(), pass.c_str());
 
