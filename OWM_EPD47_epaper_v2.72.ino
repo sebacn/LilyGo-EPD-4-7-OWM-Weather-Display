@@ -21,6 +21,7 @@
 #include "lang.h"
 #include "config.h"
 #include "loginfo.h"
+#include "driver/rtc_io.h"
 
 /*
 Replace in the sdkconfig.h
@@ -84,7 +85,7 @@ float snow_readings[max_readings]        = {0};
 long StartTime       = 0;
 long SleepTimer      = 0;
 long Delta           = 30; // ESP32 rtc speed compensation, prevents display at xx:59:yy and then xx:00:yy (one minute later) to save power
-int boot_count;
+RTC_DATA_ATTR int boot_count;
 
 //fonts
 #include "fonts/opensans5cb_special2.h"
@@ -108,6 +109,10 @@ int boot_count;
 #include "imgs/TempHi.h"
 #include "imgs/TempLo.h"
 
+#include "imgs/imgcat.h"
+#include "imgs/imglandscape.h"
+#include "imgs/imgminion.h"
+
 GFXfont  currentFont;
 uint8_t *framebuffer;
 
@@ -126,7 +131,8 @@ void collectAndWriteLog(int mode, bool is_time_fetched, bool is_weather_fetched,
     logInfo.ConfigOk = configOk;
     logInfo.BootCount = boot_count;
     logInfo.UTCTimestamp = is_time_fetched? (datetime_request.response.dt - datetime_request.response.gmt_offset) : 0;
-    logInfo.BatteryPct = DrawBattery(0, 0, true);
+    //logInfo.BatteryPct = DrawBattery(0, 0, true);
+    DrawBattery(0, 0, true);
     logInfo.TimeFetchOk = is_time_fetched;
     logInfo.WeatherFetchOk = is_weather_fetched;
     logInfo.AQIFetchOk = is_aq_fetched;
@@ -312,9 +318,39 @@ void loop() {
   }
 }
 
+void run_imgdraw_mode()
+{
+    int img_idx;
+    const uint8_t *img_data[3] = {ImgCat_data, ImgLandscape_data, ImgMinion_data};
 
+    preferences.begin("img_key", false);
+    img_idx = preferences.getInt("img_idx", 0); 
+    preferences.putInt("img_idx", (img_idx + 1) > 2? 0 : img_idx + 1);    
+    preferences.end();   
+
+    dbgPrintln("Img_idx: " + String(img_idx));
+
+    epd_poweron();      // Switch on EPD display
+    epd_clear();        // Clear the screen
+
+    Rect_t area = {.x = 0, .y = 0, .width  = 960, .height = 540};
+    epd_draw_grayscale_image(area, (uint8_t *) img_data[img_idx]);
+
+    edp_update();       // Update the display to show the information
+    epd_poweroff_all(); // Switch off all power to EPD
+
+    //esp_sleep_enable_timer_wakeup(((uint64_t)600)*1000000L); //10min
+    esp_deep_sleep_start();
+}
+
+void IRAM_ATTR btn39Click(void)
+{
+    set_mode_and_reboot(IMGDRAW_MODE);
+}
 
 void setup() {
+
+  #define WAKEUP_GPIO GPIO_NUM_39
 
   InitialiseSystem();
 
@@ -325,6 +361,15 @@ void setup() {
   dbgPrintln("\n\n=== WEATHER STATION ===\n\n");
   //init_display();
   wakeup_reason();
+
+  esp_sleep_enable_ext0_wakeup(WAKEUP_GPIO, 0);  //1 = High, 0 = Low
+  // Configure pullup/downs via RTCIO to tie wakeup pins to inactive level during deepsleep.
+  // EXT0 resides in the same power domain (RTC_PERIPH) as the RTC IO pullup/downs.
+  // No need to keep that power domain explicitly, unlike EXT1.
+  rtc_gpio_pulldown_dis(WAKEUP_GPIO);
+  rtc_gpio_pullup_en(WAKEUP_GPIO);  
+
+  attachInterrupt(digitalPinToInterrupt(WAKEUP_GPIO), btn39Click, FALLING);
 
   switch (get_mode())
   {
@@ -341,6 +386,11 @@ void setup() {
     case OPERATING_MODE:
       dbgPrintln("MODE: Operating");
       run_operating_mode();
+      break;
+
+    case IMGDRAW_MODE:
+      dbgPrintln("MODE: Draw image");
+      run_imgdraw_mode();
       break;
 
     default:
@@ -685,9 +735,9 @@ String WindDegToOrdinalDirection(float winddirection) {
 
 void DisplayTempHumiPressSection(int x, int y) {
   setFont(OpenSans18B);
-  drawString(x - 30, y-5, String(WxConditions[0].Temperature, 1) + "°   " + String(WxConditions[0].Humidity, 0) + "%", LEFT);
+  drawString(x - 30, y-10, String(WxConditions[0].Temperature, 1) + "°   " + String(WxConditions[0].Humidity, 0) + "%", LEFT);
   setFont(OpenSans12B);
-  DrawPressureAndTrend(x + 195, y + 7, WxConditions[0].Pressure, WxConditions[0].Trend);
+  DrawPressureAndTrend(x + 195, y + 3, WxConditions[0].Pressure, WxConditions[0].Trend);
   int Yoffset = 47;
   if (WxConditions[0].Windspeed > 0) {
     drawString(x + 5, y + Yoffset, String(WxConditions[0].FeelsLike, 1), LEFT);   // Show FeelsLike temperature if windspeed > 0
@@ -978,7 +1028,7 @@ boolean UpdateLocalTime() {
   return true;
 }
 
-uint8_t DrawBattery(int x, int y, bool _skipDraw) {
+void DrawBattery(int x, int y, bool _skipDraw) {
   uint8_t percentage = 100;
   esp_adc_cal_characteristics_t adc_chars;
   esp_adc_cal_value_t val_type = esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, 1100, &adc_chars);
@@ -994,7 +1044,9 @@ uint8_t DrawBattery(int x, int y, bool _skipDraw) {
     if (voltage <= 3.20) percentage = 0;  // orig 3.5
     if (_skipDraw)
     {
-      return percentage;
+      logInfo.BatteryPct = percentage;
+      logInfo.BatteryVoltage = voltage;
+      return;
     }
     y -= 3;
     drawRect(x + 25, y - 14, 40, 15, Black);
@@ -1003,7 +1055,6 @@ uint8_t DrawBattery(int x, int y, bool _skipDraw) {
     y +=3;
     drawString(x + 80, y - 17, String(percentage) + "% " + String(voltage, 1) + "v", LEFT);
   }
-  return percentage;
 }
 
 // Symbols are drawn on a relative 10x10grid and 1 scale unit = 1 drawing unit

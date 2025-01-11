@@ -32,6 +32,7 @@
 #define CONFIG_MODE 1
 #define VALIDATING_MODE 2
 #define OPERATING_MODE 3
+#define IMGDRAW_MODE 4
 
 enum alignment {LEFT, RIGHT, CENTER};
 
@@ -447,8 +448,9 @@ void wakeup_reason() {
         
         case ESP_SLEEP_WAKEUP_EXT0 : 
             dbgPrintln("Wakeup by ext signal RTC_IO -> GPIO39"); 
-            if (get_mode() == OPERATING_MODE) {
+            if (get_mode() != IMGDRAW_MODE) {
                 // Toggle between 2 screens caused by button press WAKE_BTN_PIN
+                set_mode(IMGDRAW_MODE);
             }        
             break;
             
@@ -742,7 +744,7 @@ void run_config_server() {
         dbgPrintln("Config: WiFi manager exit..");
 
         display_print_text(OpenSans12B, 230, 400, "WiFi manager exit..");
-        delay(2000);
+        //delay(2000);
 
         if (shouldSaveConfig)
         {

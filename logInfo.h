@@ -57,6 +57,7 @@ struct LogInfo {
     int BootCount;
     long UTCTimestamp;
     int BatteryPct;
+    float BatteryVoltage;
     bool ConfigOk;
     int Mode;
     bool TimeFetchOk; 
@@ -126,6 +127,7 @@ void writeLogInfo(){
     
     pointDevice.addField("DEV_BootCnt", logInfo.BootCount);
     pointDevice.addField("DEV_BatteryPct", logInfo.BatteryPct);
+    pointDevice.addField("DEV_BatteryVoltage", logInfo.BatteryVoltage);    
 
     if (logInfo.WeatherFetchOk)
     {
