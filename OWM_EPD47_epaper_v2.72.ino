@@ -104,6 +104,9 @@ int boot_count;
 #include "imgs/Gauge3.h"
 #include "imgs/Gauge4.h"
 #include "imgs/AirTree.h"
+#include "imgs/TempFL.h"
+#include "imgs/TempHi.h"
+#include "imgs/TempLo.h"
 
 GFXfont  currentFont;
 uint8_t *framebuffer;
@@ -594,7 +597,7 @@ String TitleCase(String text) {
 }
 
 void DisplayWeather() {                          // 4.7" e-paper display is 960x540 resolution
-  DisplayStatusSection(525, 25, wifi_signal);    // Wi-Fi signal strength and Battery voltage
+  DisplayStatusSection(525, 27, wifi_signal);    // Wi-Fi signal strength and Battery voltage
   DisplayGeneralInfoSection();                   // Top line of the display
   DisplayDisplayWindSection(137, 155, WxConditions[0].Winddir, WxConditions[0].Windspeed, 100);
   DisplayAstronomySection(5, 252);               // Astronomy section Sun rise/set, Moon phase and Moon icon
@@ -608,7 +611,7 @@ void DisplayGeneralInfoSection() {
   setFont(OpenSans18B);
   drawString(5, 3, settings.City, LEFT);
   setFont(OpenSans12B);
-  drawString(350, 5, Date_str + " @ " + Time_str, LEFT);
+  drawString(385, 5, Date_str + " @ " + Time_str, LEFT);
 }
 
 void DisplayWeatherIcon(int x, int y) {
@@ -618,7 +621,7 @@ void DisplayWeatherIcon(int x, int y) {
 
 void DisplayMainWeatherSection(int x, int y) {
   setFont(OpenSans8B);
-  DisplayTempHumiPressSection(x+5, y - 50);
+  DisplayTempHumiPressSection(x+5, y - 45);
   //DisplayForecastTextSection(x - 55, y + 45);
   DisplayVisiCCoverUVISection(x - 18, y + 45);
   DisplayAirQualitySection(x - 25, y + 85);
@@ -682,15 +685,22 @@ String WindDegToOrdinalDirection(float winddirection) {
 
 void DisplayTempHumiPressSection(int x, int y) {
   setFont(OpenSans18B);
-  drawString(x - 30, y, String(WxConditions[0].Temperature, 1) + "°   " + String(WxConditions[0].Humidity, 0) + "%", LEFT);
+  drawString(x - 30, y-5, String(WxConditions[0].Temperature, 1) + "°   " + String(WxConditions[0].Humidity, 0) + "%", LEFT);
   setFont(OpenSans12B);
-  DrawPressureAndTrend(x + 195, y + 15, WxConditions[0].Pressure, WxConditions[0].Trend);
+  DrawPressureAndTrend(x + 195, y + 7, WxConditions[0].Pressure, WxConditions[0].Trend);
   int Yoffset = 47;
   if (WxConditions[0].Windspeed > 0) {
-    drawString(x - 30, y + Yoffset, String(WxConditions[0].FeelsLike, 1) + "° FL", LEFT);   // Show FeelsLike temperature if windspeed > 0
+    drawString(x + 5, y + Yoffset, String(WxConditions[0].FeelsLike, 1), LEFT);   // Show FeelsLike temperature if windspeed > 0
+    drawGrayscaleImage(ImgTempFL_info(x - 30, y + Yoffset - 5));
     //Yoffset += 30;
   }
-  drawString(x + 75, y + Yoffset - 7, String(WxConditions[0].High, 0) + "° | " + String(WxConditions[0].Low, 0) + "° Hi/Lo", LEFT); // Show forecast high and Low
+  //drawString(x + 75, y + Yoffset - 7, String(WxConditions[0].High, 0) + "° | " + String(WxConditions[0].Low, 0) + "° Hi/Lo", LEFT); // Show forecast high and Low
+
+  drawGrayscaleImage(ImgTempHi_info(x + 70, y + Yoffset -5));
+  drawString(x + 95, y + Yoffset, String(WxConditions[0].High, 1), LEFT); // Show forecast high and Low
+  
+  drawGrayscaleImage(ImgTempLo_info(x + 160, y + Yoffset - 5));
+  drawString(x + 185, y + Yoffset, String(WxConditions[0].Low, 1), LEFT);
 }
 
 void DisplayForecastTextSection(int x, int y) {
@@ -914,7 +924,7 @@ void DrawPressureAndTrend(int x, int y, float pressure, String slope) {
 
 void DisplayStatusSection(int x, int y, int rssi) {
   setFont(OpenSans12B);
-  DrawRSSI(x + 385, y + 2, rssi);
+  DrawRSSI(x + 385, y, rssi);
   DrawBattery(x + 180, y, false);
 }
 
@@ -971,7 +981,7 @@ boolean UpdateLocalTime() {
 uint8_t DrawBattery(int x, int y, bool _skipDraw) {
   uint8_t percentage = 100;
   esp_adc_cal_characteristics_t adc_chars;
-  esp_adc_cal_value_t val_type = esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, &adc_chars);
+  esp_adc_cal_value_t val_type = esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, 1100, &adc_chars);
   if (val_type == ESP_ADC_CAL_VAL_EFUSE_VREF) {
     dbgPrintln("eFuse Vref:" + String(adc_chars.vref) + " mV");
     vref = adc_chars.vref;
@@ -986,9 +996,11 @@ uint8_t DrawBattery(int x, int y, bool _skipDraw) {
     {
       return percentage;
     }
+    y -= 3;
     drawRect(x + 25, y - 14, 40, 15, Black);
     fillRect(x + 65, y - 10, 4, 7, Black);
     fillRect(x + 27, y - 12, 36 * percentage / 100.0, 11, Black);
+    y +=3;
     drawString(x + 80, y - 17, String(percentage) + "% " + String(voltage, 1) + "v", LEFT);
   }
   return percentage;
@@ -1385,19 +1397,19 @@ void DrawGauge(int x, int y, AQIndicator ind)
     }
 
     constexpr auto gauge_center_offset_x = ImgGaugeFrame0_width / 2;
-    constexpr auto gauge_txt_baseline_y  = 17 + 1;
+    constexpr auto gauge_txt_baseline_y  = 17 + 10;
     constexpr auto txt_subscript_shift_y = 8;
 
-    setFont(OpenSans6B);
+    setFont(OpenSans8B);
     int dw = drawString(x + gauge_center_offset_x, y + gauge_txt_baseline_y, spec.main, CENTER);
     if (spec.sub)
     {
-        setFont(OpenSans5CB_Special2);
+        setFont(OpenSans6B);
         drawString(x + gauge_center_offset_x + dw / 2, y + gauge_txt_baseline_y + txt_subscript_shift_y, spec.sub,
                    LEFT);
     }
 
-    setFont(OpenSans8B);
+    setFont(OpenSans10B);
     // all other indicators range < 1000, CO reaches 20 000, so scale it so it fits in 3 digits
     if (ind == AQIndicator::CO) val /= 100.0;
     int32_t disp_val = round(val);
@@ -1408,7 +1420,7 @@ void DrawGauge(int x, int y, AQIndicator ind)
 void DisplayAQI(int x, int y)
 {
     drawGrayscaleImage(ImgAIQ_info(x, y));
-    setFont(OpenSans8B);
+    setFont(OpenSans10B);
     // OWM's api uses 1=best...5=worst and we use x/5 scale, so we need to reverse the output
     int q = 6 - WxAirQ.AQI;
     drawString(x + ImgAIQ_width + 3, y + 10, String(q) + "/5", LEFT);
@@ -1416,7 +1428,7 @@ void DisplayAQI(int x, int y)
 
 void DisplayAirQualitySection(int x, int y)
 {
-    constexpr auto aiq_w   = 74;
+    constexpr auto aiq_w   = 85;
     constexpr auto gauge_w = 84;
 
     DisplayAQI(x, y + 1);
