@@ -22,6 +22,8 @@
 #include "config.h"
 #include "loginfo.h"
 #include "driver/rtc_io.h"
+//#include "driver/adc.h"
+//#include "esp_adc_cal.h"
 
 /*
 Replace in the sdkconfig.h
@@ -340,15 +342,7 @@ void run_imgdraw_mode()
     edp_update();       // Update the display to show the information
     epd_poweroff_all(); // Switch off all power to EPD
 
-/*
-    esp_sleep_enable_ext0_wakeup(WAKEUP_GPIO, 0);  //1 = High, 0 = Low
-    // Configure pullup/downs via RTCIO to tie wakeup pins to inactive level during deepsleep.
-    // EXT0 resides in the same power domain (RTC_PERIPH) as the RTC IO pullup/downs.
-    // No need to keep that power domain explicitly, unlike EXT1.
-    rtc_gpio_pulldown_dis(WAKEUP_GPIO);
-    rtc_gpio_pullup_en(WAKEUP_GPIO); 
-    //esp_sleep_enable_timer_wakeup(((uint64_t)600)*1000000L); //10min
-    */
+    DrawBattery(0, 0, true); //debug batt voltage
 
     esp_deep_sleep_start();
 }
@@ -1027,24 +1021,36 @@ boolean UpdateLocalTime() {
 }
 
 void DrawBattery(int x, int y, bool _skipDraw) {
+  #define DEFAULT_VREF 1100
   uint8_t percentage = 100;
+/*
   esp_adc_cal_characteristics_t adc_chars;
-  esp_adc_cal_value_t val_type = esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, 1100, &adc_chars);
+  esp_adc_cal_value_t val_type = esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, DEFAULT_VREF, &adc_chars);
   if (val_type == ESP_ADC_CAL_VAL_EFUSE_VREF) {
     dbgPrintln("eFuse Vref:" + String(adc_chars.vref) + " mV");
     vref = adc_chars.vref;
   }
   float voltage = analogRead(36) / 4096.0 * 6.566 * (vref / 1000.0);
+  //dbgPrintln("Voltage = " + String(voltage));
+*/
+  float voltage = ((float)(2*analogReadMilliVolts(36)))/1000.0f - 0.5f; //0.52 voltage correction
+  voltage += (WiFi.status() == WL_CONNECTED)? 0.11f : 0.0f;
+
   if (voltage > 1 ) { // Only display if there is a valid reading
-    dbgPrintln("Voltage = " + String(voltage));
+    /*
     percentage = 2836.9625 * pow(voltage, 4) - 43987.4889 * pow(voltage, 3) + 255233.8134 * pow(voltage, 2) - 656689.7123 * voltage + 632041.7303;
     if (voltage >= 4.20) percentage = 100;
     if (voltage <= 3.20) percentage = 0;  // orig 3.5
+*/
+    percentage = map(voltage, 3.5f, 4.2f, 0, 100);
+
+    dbgPrintln("Voltage = " + String(voltage) + ", pct: " + String(percentage) + ", wifistat: " + String(WiFi.status()));
+
     if (_skipDraw)
     {
       logInfo.BatteryPct = percentage;
       logInfo.BatteryVoltage = voltage;
-      logInfo.BatteryVref = vref;
+      //logInfo.BatteryVref = vref;
       return;
     }
     y -= 3;
