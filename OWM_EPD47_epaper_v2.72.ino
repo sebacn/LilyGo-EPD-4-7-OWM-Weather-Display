@@ -1021,28 +1021,17 @@ boolean UpdateLocalTime() {
 }
 
 void DrawBattery(int x, int y, bool _skipDraw) {
-  #define DEFAULT_VREF 1100
+  
   uint8_t percentage = 100;
-/*
-  esp_adc_cal_characteristics_t adc_chars;
-  esp_adc_cal_value_t val_type = esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, DEFAULT_VREF, &adc_chars);
-  if (val_type == ESP_ADC_CAL_VAL_EFUSE_VREF) {
-    dbgPrintln("eFuse Vref:" + String(adc_chars.vref) + " mV");
-    vref = adc_chars.vref;
-  }
-  float voltage = analogRead(36) / 4096.0 * 6.566 * (vref / 1000.0);
-  //dbgPrintln("Voltage = " + String(voltage));
-*/
-  float voltage = ((float)(2*analogReadMilliVolts(36)))/1000.0f - 0.5f; //0.52 voltage correction
-  voltage += (WiFi.status() == WL_CONNECTED)? 0.11f : 0.0f;
+
+  float voltage = ((float)(2*analogReadMilliVolts(36)))/1000.0f + 0.07f;
 
   if (voltage > 1 ) { // Only display if there is a valid reading
-    /*
-    percentage = 2836.9625 * pow(voltage, 4) - 43987.4889 * pow(voltage, 3) + 255233.8134 * pow(voltage, 2) - 656689.7123 * voltage + 632041.7303;
-    if (voltage >= 4.20) percentage = 100;
-    if (voltage <= 3.20) percentage = 0;  // orig 3.5
-*/
-    percentage = map(voltage, 3.5f, 4.2f, 0, 100);
+
+    percentage = 2836.9625 * pow(voltage, 4) - 43987.4889 * pow(voltage, 3) + 255233.8134 * pow(voltage, 2) - 656689.7123 * voltage + 632041.7303;   
+
+    percentage = voltage < 3.5f ? 0 : percentage;
+    percentage = voltage > 4.2f ? 100 : percentage;
 
     dbgPrintln("Voltage = " + String(voltage) + ", pct: " + String(percentage) + ", wifistat: " + String(WiFi.status()));
 
@@ -1050,7 +1039,6 @@ void DrawBattery(int x, int y, bool _skipDraw) {
     {
       logInfo.BatteryPct = percentage;
       logInfo.BatteryVoltage = voltage;
-      //logInfo.BatteryVref = vref;
       return;
     }
     y -= 3;
@@ -1058,7 +1046,7 @@ void DrawBattery(int x, int y, bool _skipDraw) {
     fillRect(x + 65, y - 10, 4, 7, Black);
     fillRect(x + 27, y - 12, 36 * percentage / 100.0, 11, Black);
     y +=3;
-    drawString(x + 80, y - 17, String(percentage) + "% " + String(voltage, 1) + "v", LEFT);
+    drawString(x + 80, y - 17, String(percentage) + "% " + String(voltage, 2) + "v", LEFT);
   }
 }
 

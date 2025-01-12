@@ -546,7 +546,7 @@ void display_validating_mode() {
     setFont(OpenSans18B);
     drawString(15, 110, "Validate settings..", LEFT);
 
-    DisplayStatusSection(575, 25, -100); 
+    DisplayStatusSection(540, 25, -100); 
 
     edp_update();       // Update the display to show the information
     epd_poweroff_all(); // Switch off all power to EPD
@@ -574,7 +574,7 @@ void display_config_mode(String network, String pass, String ip) {
     drawString(15, 200, "Scan QR code to WiFi connect", LEFT);
     drawString(230, 230, "Connection parameters:\nSSID: " + network + "\nPass: " + pass + "\nURL: http://" + ip , LEFT);
 
-    DisplayStatusSection(575, 25, -100); 
+    DisplayStatusSection(540, 25, -100); 
 
     Rect_t area = {.x = 600, .y = 150, .width  = wifi_cfg_width, .height = wifi_cfg_height};
     epd_draw_grayscale_image(area, (uint8_t *) wifi_cfg_data);
@@ -612,7 +612,7 @@ void display_faild_mode_and_sleep() {
         + String(ts.hours()) + " hours " 
         + String(ts.minutes()) + " minutes", LEFT);
 
-    DisplayStatusSection(575, 25, -100); 
+    DisplayStatusSection(540, 25, -100); 
 
     Rect_t area = {.x = 500, .y = 150, .width  = wifi_nook_width, .height = wifi_nook_height};
     epd_draw_grayscale_image(area, (uint8_t *) wifi_nook_data);
