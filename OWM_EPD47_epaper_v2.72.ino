@@ -71,6 +71,7 @@ String  Date_str = "-- --- ----";
 int     wifi_signal, CurrentHour = 0, CurrentMin = 0, CurrentSec = 0, EventCnt = 0, vref = 1100;
 //################ PROGRAM VARIABLES and OBJECTS ##########################################
 #define max_readings 24 // Limited to 3-days here, but could go to 5-days = 40 as the data is issued  
+#define BUTTON_PIN_BITMASK(GPIO) (1ULL << GPIO)  // 2 ^ GPIO_NUMBER in hex
 
 Forecast_record_type  WxConditions[1];
 Forecast_record_type  WxForecast[max_readings];
@@ -123,14 +124,14 @@ extern LogInfo logInfo;
 void run_operating_mode();
 void DisplayAirQualitySection(int x, int y);
 String dbgPrintln(String _str);
-void display_faild_mode_and_sleep();
+void display_failed_mode_and_sleep();
 
 void collectAndWriteLog(int mode, bool is_time_fetched, bool is_weather_fetched, bool is_aq_fetched)
 {
     dbgPrintln("InfluxDBClient: collectAndWriteLog");
 
     logInfo.Mode = mode;
-    logInfo.ConfigOk = configOk;
+    logInfo.ConfigOk = settings.ConfigOk;
     logInfo.BootCount = boot_count;
     logInfo.UTCTimestamp = is_time_fetched? (datetime_request.response.dt - datetime_request.response.gmt_offset) : 0;
     //logInfo.BatteryPct = DrawBattery(0, 0, true);
@@ -240,15 +241,6 @@ void BeginSleep(bool _timeIsSet) {
   {
     UpdateLocalTime();
   }
- 
-
-/*
-  SleepTimer = (settings.SleepDuration * 60 - ((CurrentMin % settings.SleepDuration) * 60 + CurrentSec)) + Delta; //Some ESP32 have a RTC that is too fast to maintain accurate time, so add an offset
-  esp_sleep_enable_timer_wakeup(SleepTimer * 1000000LL); // in Secs, 1000000LL converts to Secs as unit = 1uSec
-  Serial.println("Awake for : " + String((millis() - StartTime) / 1000.0, 3) + "-secs");
-  Serial.println("Entering " + String(SleepTimer) + " (secs) of sleep time");
-  Serial.println("Starting deep-sleep period...");
-  */
 
   enable_timed_sleep(settings.SleepDuration, _timeIsSet);
 
@@ -329,7 +321,8 @@ void run_imgdraw_mode()
     preferences.begin("img_key", false);
     img_idx = preferences.getInt("img_idx", 0); 
     preferences.putInt("img_idx", (img_idx + 1) > 2? 0 : img_idx + 1);    
-    preferences.end();   
+    preferences.end();
+    memset(framebuffer, 0xFF, EPD_WIDTH * EPD_HEIGHT / 2);
 
     dbgPrintln("Img_idx: " + String(img_idx));
 
@@ -341,8 +334,6 @@ void run_imgdraw_mode()
 
     edp_update();       // Update the display to show the information
     epd_poweroff_all(); // Switch off all power to EPD
-
-    DrawBattery(0, 0, true); //debug batt voltage
 
     esp_deep_sleep_start();
 }
@@ -356,66 +347,60 @@ void setup() {
   Serial.begin(115200); 
 
   dbgPrintln("\n\n=== WEATHER STATION ===\n\n");
-  //init_display();
-  wakeup_reason(); 
 
-  esp_sleep_enable_ext0_wakeup(GPIO_NUM_39, 0);
+  print_pt();
+
+  uint8_t wakeup = wakeup_reason();
+  read_config_from_memory();
+
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_39, 0); //wakeup for image draw
   rtc_gpio_pulldown_dis(GPIO_NUM_39);
-  rtc_gpio_pullup_en(GPIO_NUM_39);   
+  rtc_gpio_pullup_en(GPIO_NUM_39);
 
-  switch (get_mode())
+  esp_sleep_enable_ext1_wakeup(BUTTON_PIN_BITMASK(GPIO_NUM_34), ESP_EXT1_WAKEUP_ALL_LOW); //wakeup for weater draw
+  rtc_gpio_pulldown_dis(GPIO_NUM_34);
+  rtc_gpio_pullup_en(GPIO_NUM_34); 
+
+  if (!settings.ConfigOk)
   {
-    case CONFIG_MODE:
-      dbgPrintln("MODE: Config");      
+      dbgPrintln("MODE: Config (settings config NOK)");      
       run_config_server();
-      break;
+  } 
+  else
+  {
+    switch (wakeup)
+    {
+      case ESP_SLEEP_WAKEUP_EXT0: //rst button
+        dbgPrintln("MODE: Draw image");
+        run_imgdraw_mode();
+        break;
 
-    case VALIDATING_MODE:
-      dbgPrintln("MODE: Validating");
-      run_validating_mode();
-      break;
+      case ESP_SLEEP_WAKEUP_TIMER:
+      case ESP_SLEEP_WAKEUP_EXT1:  
+      case ESP_WAKEUP_SWCPU_RESET: //after validate  
+        dbgPrintln("MODE: Operating");
+        run_operating_mode();
+        break;
 
-    case OPERATING_MODE:
-      dbgPrintln("MODE: Operating");
-      run_operating_mode();
-      break;
+      default:
+        dbgPrintln("MODE: Config");      
+        run_config_server();
+        break;
 
-    case IMGDRAW_MODE:
-      dbgPrintln("MODE: Draw image");
-      run_imgdraw_mode();
-      break;
-
-    default:
-      dbgPrintln("MODE: not set. Initializing mode to CONFIG_MODE.");
-      set_mode_and_reboot(CONFIG_MODE);
-      break;
+    }
   }
-
 }
 
 void run_operating_mode() {
-
-    read_config_from_memory();
-    //wakeup_reason();
  
     if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
-      bool WakeUp = false;
-
-      if (settings.WakeupHour > settings.SleepHour)
-        WakeUp = (CurrentHour >= settings.WakeupHour || CurrentHour <= settings.SleepHour);
-      else
-        WakeUp = (CurrentHour >= settings.WakeupHour && CurrentHour <= settings.SleepHour);
-
-      if (WakeUp) {
-       request_render_weather(false);
-      }
-
+      request_render_weather(false); 
       failed_count(true);
       BeginSleep(true);
     }
     else
     {
-      display_faild_mode_and_sleep();
+      display_failed_mode_and_sleep();
     }
   
     BeginSleep(false);
@@ -985,16 +970,15 @@ void DrawRSSI(int x, int y, int rssi) {
 }
 
 boolean UpdateLocalTime() {
-  //struct tm timeinfo;
+  struct tm timeinfo;
   char   time_output[30], day_output[30], update_time[30];
-  /*
-  while (!getLocalTime(&timeinfo, 5000)) { // Wait for 5-sec for time to synchronise
+  
+  while (!getLocalTime(&timeinfo)) { // Wait for 5-sec for time to synchronise
     Serial.println("Failed to obtain time");
     return false;
   }
-  */
 
-  struct tm timeinfo = *localtime(&datetime_request.response.dt);
+  //struct tm timeinfo = *localtime(&datetime_request.response.dt);
 
   CurrentHour = timeinfo.tm_hour;
   CurrentMin  = timeinfo.tm_min;
@@ -1473,7 +1457,7 @@ void DisplayAQI(int x, int y)
 void DisplayAirQualitySection(int x, int y)
 {
     constexpr auto aiq_w   = 85;
-    constexpr auto gauge_w = 84;
+    constexpr auto gauge_w = 100;
 
     DisplayAQI(x, y + 1);
 

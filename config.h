@@ -27,19 +27,15 @@
 #include "imgs/wifi_cfg.h"
 
 #define MEMORY_ID "mem"
-
-#define NOT_SET_MODE 0
-#define CONFIG_MODE 1
-#define VALIDATING_MODE 2
-#define OPERATING_MODE 3
-#define IMGDRAW_MODE 4
+#define ESP_WAKEUP_RST_BUTTON 25
+#define ESP_WAKEUP_SWCPU_RESET 26
 
 enum alignment {LEFT, RIGHT, CENTER};
 
 int SLEEP_INTERVAL_MIN;
 //flag for saving data
 bool shouldSaveConfig = false;
-bool configOk = false;
+//bool configOk = false;
 bool dnsStarted = false;
 //bool dbglog_enable;
 extern uint8_t *framebuffer;
@@ -54,12 +50,12 @@ struct WeatherRequest weather_request;
 // The structure to manage the QR code
 QRCode qrcode;
 
-int get_mode();
+//int get_mode();
 extern int drawString(int x, int y, String text, alignment align);
 uint8_t StartWiFi();
 JsonDocument deserialize(WiFiClient& resp_stream, bool is_embeded=false);
-void set_mode(int mode);
-void set_mode_and_reboot(int mode);
+//void set_mode(int mode);
+//void set_mode_and_reboot(int mode);
 void edp_update();
 void setFont(GFXfont const & font);
 boolean SetupTime();
@@ -67,6 +63,7 @@ void request_render_weather(bool _clearDisplay = false);
 void BeginSleep(bool _timeIsSet);
 //boolean UpdateLocalTime();
 //extern bool DecodeWeather(WiFiClient& json, String Type);
+void run_validating_mode();
 void DisplayStatusSection(int x, int y, int rssi);
 void collectAndWriteLog(int mode, bool is_time_fetched, bool is_weather_fetched, bool is_aq_fetched);
 int failed_count(bool _reset);
@@ -155,6 +152,13 @@ void update_datetime(TimeZoneDbResponse& datetime_resp, JsonObject& jobj) {
     datetime_resp.gmt_offset = jobj["gmtOffset"].as<int>();
     datetime_resp.dst = jobj["dst"].as<int>();
     datetime_resp.formatted = jobj["formatted"].as<String>();
+
+    struct timeval tv;
+    tv.tv_usec = 0;
+    tv.tv_sec = datetime_resp.dt;
+    settimeofday(&tv, NULL);
+    setenv("TZ", "UTC0", 1); // https://www.gnu.org/software/libc/manual/html_node/TZ-Variable.html
+    tzset();
 }
 /*
 void update_current_weather(WeatherResponseHourly& hourly, JsonObject& root) {
@@ -327,90 +331,6 @@ bool http_request_data(WiFiClientSecure& client, Request request, unsigned int r
     }
     return ret_val;
 }
-/*
-bool http_request_dataV2(Request request, unsigned int retry=3) {
-    
-    bool ret_val = false;
-    WiFiClient *transport = nullptr;
-
-    if (request.UseHTTPS())
-    {
-        auto c = new WiFiClientSecure();
-        c->setCACert(request.ROOT_CA);
-        transport = c;
-    }
-    else 
-    { 
-        transport = new WiFiClient{}; 
-    }
-
-    request.make_path();
-
-    while (!ret_val && retry--) {
-        ret_val = true;
-        transport->stop();
-        HTTPClient http;
-        Serial.printf("\nHTTP (HTTPS: %s) connecting to %s%s [retry left: %s]", String(request.UseHTTPS()).c_str(), request.server.c_str(), request.path.c_str(), String(retry).c_str());
-        http.begin(*transport, request.server, request.UseHTTPS()? 443 : 80, request.path);
-        int http_code = http.GET();
-        
-        if(http_code == HTTP_CODE_OK) {
-            dbgPrintln("\nHTTP connection established");
-            if (!request.handler(http.getStream(), request)) {
-                ret_val = false;
-            }
-        } else {
-            Serial.printf("\nHTTP connection failed %s, error: %s \n\n", String(http_code).c_str(), http.errorToString(http_code).c_str());
-            ret_val = false;
-        }
-        transport->stop();
-        http.end();
-    }
-    return ret_val;
-}
-
-
-void disconnect_from_wifi() {
-    WiFi.disconnect();
-    WiFi.mode(WIFI_OFF);
-}
-
-bool connect_to_wifi(unsigned int retry=5) {
-
-    int wifi_conn_status = WL_IDLE_STATUS;
-    WiFi.mode(WIFI_STA); // Access Point mode off
-    WiFi.setAutoConnect(true);
-    WiFi.setAutoReconnect(true);
-
-    while(wifi_conn_status != WL_CONNECTED && retry--) {
-        dbgPrintln("\nConnecting to: " + wifiCred.ssid + " [retry left: " + retry +"]");
-        unsigned long start = millis();
-        wifi_conn_status = WiFi.begin(wifiCred.ssid.c_str(), wifiCred.pass.c_str());
-        
-        while (true) {
-            if (millis() > start + 10000) { // 10s
-                break;
-            }
-            delay(100);
-    
-            wifi_conn_status = WiFi.status();
-            
-            if (wifi_conn_status == WL_CONNECTED) {
-                dbgPrintln("Wifi connected. IP: " + WiFi.localIP().toString());    
-                break;
-            } else if(wifi_conn_status == WL_CONNECT_FAILED) {
-                dbgPrintln("Wifi failed to connect.");
-                break;
-            }
-        }
-        if (wifi_conn_status == WL_CONNECTED) {
-            return true;
-        }
-        delay(2000); // 2sec
-    }
-    return false;
-}
-*/
 
 String print_reset_reason(RESET_REASON reason) {
     String ret = "";
@@ -436,41 +356,33 @@ String print_reset_reason(RESET_REASON reason) {
 }
 
 
-void wakeup_reason() {
-    esp_sleep_wakeup_cause_t wakeup_reason;
-    wakeup_reason = esp_sleep_get_wakeup_cause();
+uint8_t wakeup_reason() {
+
+    uint8_t ret = (uint8_t)esp_sleep_get_wakeup_cause();
 
     dbgPrintln("CPU0 reset reason: " + print_reset_reason(rtc_get_reset_reason(0)));
     dbgPrintln("CPU1 reset reason: " + print_reset_reason(rtc_get_reset_reason(1)) + "\n");
     
-    switch(wakeup_reason){
+    switch(ret){
         //dbgPrintln("Location variable: " + String(curr_loc));
         
-        case ESP_SLEEP_WAKEUP_EXT0 : 
-            dbgPrintln("Wakeup by ext signal RTC_IO -> GPIO39"); 
-            if (get_mode() != IMGDRAW_MODE) {
-                // Toggle between 2 screens caused by button press WAKE_BTN_PIN
-                set_mode(IMGDRAW_MODE);
-            }        
-            break;
-            
-        case ESP_SLEEP_WAKEUP_EXT1 : 
-            dbgPrintln("Wakeup by ext signal RTC_CNTL -> GPIO34"); 
-            get_mode();
-            set_mode_and_reboot(CONFIG_MODE);
-            break;
-            
-        case ESP_SLEEP_WAKEUP_TIMER : dbgPrintln("Wakeup by timer"); break;
-        case ESP_SLEEP_WAKEUP_TOUCHPAD : dbgPrintln("Wakeup by touchpad"); break;
-        case ESP_SLEEP_WAKEUP_ULP : dbgPrintln("Wakeup by ULP program"); break;
-        default : dbgPrintln("Wakeup not caused by deep sleep: " + String(wakeup_reason)); 
+        case ESP_SLEEP_WAKEUP_EXT0 : dbgPrintln("EXT0 Wakeup by ext signal RTC_IO -> GPIO39"); break;       
+        case ESP_SLEEP_WAKEUP_EXT1 : dbgPrintln("EXT1 Wakeup by ext signal RTC_CNTL -> GPIO34"); break;
+        case ESP_SLEEP_WAKEUP_TIMER : dbgPrintln("TIMER Wakeup"); break;
+        case ESP_SLEEP_WAKEUP_TOUCHPAD : dbgPrintln("TOUCHPAD Wakeupd"); break;
+        case ESP_SLEEP_WAKEUP_ULP : dbgPrintln("ULP Wakeup by ULP program"); break;
+        default : dbgPrintln("WAKEUP not caused by deep sleep: " + String(ret)); 
             if (rtc_get_reset_reason(0) == POWERON_RESET && rtc_get_reset_reason(1) == EXT_CPU_RESET)
             {
-                get_mode();
-                set_mode_and_reboot(CONFIG_MODE);
+                ret = ESP_WAKEUP_RST_BUTTON;
+            }
+            if (rtc_get_reset_reason(0) == SW_CPU_RESET && rtc_get_reset_reason(1) == SW_CPU_RESET)
+            {
+                ret = ESP_WAKEUP_SWCPU_RESET;
             }
         break;
     }
+    return ret;
 }
 
 void read_config_from_memory() {
@@ -478,6 +390,7 @@ void read_config_from_memory() {
 
     preferences.begin(MEMORY_ID, true);  // first param true means 'read only'
 
+    settings.ConfigOk = preferences.getBool("ConfigOk", false);
     settings.WiFiSSID = preferences.getString("WiFiSSID","");
     settings.WiFiPass = preferences.getString("WiFiPass","");
     settings.OwmApikey = preferences.getString("OwmApikey","");     
@@ -509,6 +422,7 @@ void save_config_to_memory() {
     
     preferences.begin(MEMORY_ID, false);  // first param false means 'read/write'
 
+    preferences.putBool("ConfigOk", settings.ConfigOk);
     preferences.putString("WiFiSSID", settings.WiFiSSID);
     preferences.putString("WiFiPass", settings.WiFiPass);
     preferences.putString("OwmApikey", settings.OwmApikey);     
@@ -538,6 +452,7 @@ void save_config_to_memory() {
 
 void display_validating_mode() {
   
+    memset(framebuffer, 0xFF, EPD_WIDTH * EPD_HEIGHT / 2); //clear buffer
     epd_poweron();      // Switch on EPD display
     epd_clear();        // Clear the screen
 
@@ -593,10 +508,11 @@ void display_config_mode(String network, String pass, String ip) {
     free(buffer_p);
 }
 
-void display_faild_mode_and_sleep() {
+void display_failed_mode_and_sleep() {
   
     int fail_cnt = failed_count(false);
     TimeSpan ts = TimeSpan((uint32_t)powf(fail_cnt, 3) * 60);
+    memset(framebuffer, 0xFF, EPD_WIDTH * EPD_HEIGHT / 2); //clear buffer
 
     epd_poweron();      // Switch on EPD display
     epd_clear();        // Clear the screen
@@ -649,7 +565,7 @@ void display_print_text(GFXfont const & font, int _x, int _y, String _str, bool 
 void IRAM_ATTR btn39Click(void)
 {
     dbgPrintln("btn39Click");
-    set_mode_and_reboot(IMGDRAW_MODE);
+    ESP.restart();
 }
 
 void run_config_server() {
@@ -657,9 +573,7 @@ void run_config_server() {
     String network = "LilyGo-T5-4.7-weather-wifi";
     String pass = String(abs((int)esp_random())).substring(0, 4) + "0000";
 
-    print_pt();
     failed_count(true);
-    read_config_from_memory();
 
     IPAddress localIp(192, 168, 4, 1);
     IPAddress localMask(255, 255, 255, 0);
@@ -716,7 +630,7 @@ void run_config_server() {
 
     detachInterrupt(digitalPinToInterrupt(GPIO_NUM_39));
 
-    if (!res && !configOk) {
+    if (!res && !settings.ConfigOk) {
 
         dbgPrintln("Config: WiFi timeout..");
 
@@ -743,11 +657,11 @@ void run_config_server() {
 
         epd_poweroff_all();
         //uint64_t sleep_time_micro_sec = 86400000000;//24* 60 * 1000 * 1000 * 60; //24h
-        esp_sleep_enable_timer_wakeup(86400000000*30);
+        esp_sleep_enable_timer_wakeup(86400000000ULL*30ULL); //sleep 30 days
         esp_deep_sleep_start(); 
 
         delay(5000);
-        dbgPrintln("Config: Sleep..");
+        dbgPrintln("Config: Deep sleep 30 days..");
     } 
     else 
     {
@@ -775,14 +689,12 @@ void run_config_server() {
             logSettings.INFLUXDB_ORG = String(parmINFLUXDB_ORG.getValue());
             logSettings.INFLUXDB_TOKEN = String(parmINFLUXDB_TOKEN.getValue());         
             
-            save_config_to_memory();
-
-            configOk = false; //validate after save
+            settings.ConfigOk = false; //validate after save
+            save_config_to_memory();  
         }   
         
-        if (configOk)
+        if (settings.ConfigOk)
         {
-            set_mode(OPERATING_MODE);
             display_print_text(OpenSans12B, 230, 430, "Restarting to operation mode (config Ok)..");
             delay(2000);
 
@@ -794,10 +706,12 @@ void run_config_server() {
         }
         else
         {
-            set_mode(VALIDATING_MODE);
             display_print_text(OpenSans12B, 230, 430, "Restarting to validation mode..");
+            delay(3000);
+            run_validating_mode(); //go to deep sleep or restart to config
         } 
 
+        dbgPrintln("Config: ERROR - Exit to restart..");
         delay(3000);
         ESP.restart();
     }
@@ -805,17 +719,15 @@ void run_config_server() {
 
 
 void run_validating_mode() {
-    //server.end();
+    
     String keyErrMsg;
     bool checkFailed = false;
-        
-    read_config_from_memory();
     
     dbgPrintln("Validating mode..");
     display_validating_mode();
     delay(2000);
 
-    configOk = false;
+    settings.ConfigOk = false;
     
     if (StartWiFi() == WL_CONNECTED) {
         
@@ -864,16 +776,16 @@ void run_validating_mode() {
         if (keyErrMsg != "")
         {
 
-          display_print_text(OpenSans12B, 15, 170, "Parameter(s) is/are not configured:\n" + keyErrMsg + "\n" + "Restarting in 10 sec");  
+            display_print_text(OpenSans12B, 15, 170, "Parameter(s) is/are not configured:\n" + keyErrMsg + "\n" + "Restarting in 10 sec");  
 
-          if (StartWiFi() == WL_CONNECTED) {
-            collectAndWriteLog(VALIDATING_MODE, false, false, false);
-          }
+            if (StartWiFi() == WL_CONNECTED) {
+                collectAndWriteLog(VALIDATING_MODE, false, false, false);
+            }
 
-          set_mode(CONFIG_MODE);
-          delay(15000);
-          ESP.restart();
-          return;
+            dbgPrintln("Validate: restart to config mode (SW restart)");
+            delay(15000);
+            ESP.restart(); //restart back to config mode
+            return;
         }
         
         dbgPrintln("Validate: get locations by names");
@@ -940,9 +852,9 @@ void run_validating_mode() {
                 collectAndWriteLog(VALIDATING_MODE, false, false, false);
             }
 
+            dbgPrintln("Validate: restart to config mode (SW restart)");
             delay(15000);
-            set_mode(CONFIG_MODE);
-            ESP.restart();
+            ESP.restart(); 
             return;
         } 
     }
@@ -952,115 +864,28 @@ void run_validating_mode() {
 
         display_print_text(OpenSans12B, 15, 170, "Wifi connection failed\nReboot to config...");
 
-        set_mode(CONFIG_MODE);
+        dbgPrintln("Validate: restart to config mode (SW restart)");
         delay(15000);
         ESP.restart();
     }
 
-    configOk = true;
+    settings.ConfigOk = true;
 
     if (StartWiFi() == WL_CONNECTED) {
         collectAndWriteLog(VALIDATING_MODE, false, false, false);
     }
 
-    set_mode(OPERATING_MODE);
-    save_config_to_memory();
-    delay(1000);
-    display_print_text(OpenSans12B, 15, 170, "Validation OK!\nReboot to operating mode....");
-    delay(3000);
-
     infoPrintln("Validation OK! Start operating mode...");
-    if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
-        request_render_weather(true);
-        BeginSleep(true);
-    }
+    save_config_to_memory();
+    display_print_text(OpenSans12B, 15, 170, "Validation OK!\nReboot to operating mode....");
 
-    BeginSleep(false);
-    delay(15000);
-    dbgPrintln("Deep sleep..");
-
-    //set_mode_and_reboot(OPERATING_MODE);
-}
-
-/*
-void run_operating_mode() {
-
-    read_config_from_memory();
-    curr_loc = read_location_from_memory();
-    wakeup_reason();
-
-    if (connect_to_wifi()) {
-        WiFiClient client;
-
-        datetime_request.api_key = apiKeys.TIMEZDB_KEY;
-        datetime_request.make_path(location[curr_loc]);
-        datetime_request.handler = datetime_handler;
-
-        weather_request.api_key = apiKeys.OPENWEATHER_KEY;
-        weather_request.make_path(location[curr_loc]);
-        weather_request.handler = weather_handler;
-
-        airquality_request.api_key = apiKeys.WAQI_KEY;
-        airquality_request.make_path(location[curr_loc]);
-        airquality_request.handler = air_quality_handler;
-
-        bool is_time_fetched = http_request_data(client, datetime_request);
-        bool is_weather_fetched = http_request_data(client, weather_request);
-        bool is_aq_fetched = http_request_data(client, airquality_request);
-
-        view = View();
-
-        update_header_view(view, is_time_fetched); 
-        update_weather_view(view, is_weather_fetched);
-        update_air_quality_view(view, is_aq_fetched);
-            
-        dbgPrintln("\nUpdate display.");
-        display_header(view);
-        display_weather(view);
-        display_air_quality(view);
-    }
-
-    display.update();
-    delay(100); // too fast display powerDown displays blank (white)??
-
-    // deep sleep stuff
-    enable_timed_sleep(SLEEP_INTERVAL_MIN);
-    begin_deep_sleep();
-}
-*/
-
-void set_mode(int mode) {
-
-    dbgPrintln("Set mode");
-
-    preferences.begin(MEMORY_ID, false);
-    preferences.putInt("mode", mode);    
-    preferences.putBool("configOk", configOk);  // global variable
-    preferences.end();   
-
-    dbgPrintln("Config OK: " + String(configOk) + ", Mode: " + String(mode)); 
-
+    dbgPrintln("Validate: restart to config mode (SW restart)");
     delay(3000);
-}
 
-
-void set_mode_and_reboot(int mode) {
-    set_mode(mode);
     ESP.restart();
-}
 
-int get_mode() {
-
-    dbgPrintln("Get mode");
-
-    preferences.begin(MEMORY_ID, true);
-    int mode = preferences.getInt("mode", NOT_SET_MODE);
-    configOk = preferences.getBool("configOk", false);  // global variable   
-    preferences.end();
-
-    dbgPrintln("Config OK: " + String(configOk) + ", Mode: " + String(mode));
-
-    return mode;
+    delay(5000);
+    dbgPrintln("Validate: ERROR - restart validation mode..");
 }
 
 int failed_count(bool _reset) {

@@ -51,6 +51,7 @@ String Language         = "EN";                            // NOTE: Only the wea
 
 struct Settings {
 
+    bool ConfigOk = false;
     // Change to your WiFi credentials
     String WiFiSSID = "";
     String WiFiPass = "";
@@ -77,7 +78,8 @@ struct Settings {
 
         dbgPrintln("Settings: City: " + City 
             + ", (lat, lon): (" + Latitude + ", " + Longitude + ")"
-            + ", Units: " + Units);
+            + ", Units: " + Units
+            + ", ConfigOk: " + String(ConfigOk) );
 
         dbgPrintln("Settings: OwmApikey: " + OwmApikey 
             + ", TimezBBKey: " + TimezBBKey 
