@@ -564,7 +564,8 @@ bool obtainWeatherData(WiFiClientSecure & client, const String & RequestType) {
   client.stop(); // close connection before sending a new request
   HTTPClient http;  
   //api.openweathermap.org/data/2.5/RequestType?lat={lat}&lon={lon}&appid={API key}
-  String uri = "/data/2.5/" + RequestType + "?lat=" + settings.Latitude + "&lon=" + settings.Longitude + "&appid=" + settings.OwmApikey + "&mode=json&units=" + units + "&lang=" + Language;
+  String apiVer = RequestType == "onecall"? "/data/3.0/":"/data/2.5/";
+  String uri = apiVer + RequestType + "?lat=" + settings.Latitude + "&lon=" + settings.Longitude + "&appid=" + settings.OwmApikey + "&mode=json&units=" + units + "&lang=" + Language;
   if (RequestType == "onecall") uri += "&exclude=minutely,hourly,alerts,daily";
   client.setCACert(ROOT_CA_OWM);
   infoPrintln("HTTP connecting to api.openweathermap.org" + uri );

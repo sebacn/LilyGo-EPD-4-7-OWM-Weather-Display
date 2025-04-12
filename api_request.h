@@ -276,7 +276,7 @@ struct WeatherRequest: Request {
 
     void make_path(String _lat, String _lon, String _units) {
         
-        this->path = "/data/2.5/" + String(api_names[(byte)apiCall]) + "?lat=" + _lat + "&lon=" + _lon + "&appid=" + api_key + "&lang=" + LANGS[LANG]; 
+        this->path = "/data/3.0/" + String(api_names[(byte)apiCall]) + "?lat=" + _lat + "&lon=" + _lon + "&appid=" + api_key + "&lang=" + LANGS[LANG]; 
 
         if (apiCall != ApiCall::AQI){
             this->path += "&mode=json&units=";
