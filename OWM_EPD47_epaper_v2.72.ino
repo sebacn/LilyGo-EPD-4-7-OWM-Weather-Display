@@ -1012,7 +1012,7 @@ void DrawBattery(int x, int y, bool _skipDraw) {
   
   uint8_t percentage = 100;
 
-  float voltage = ((float)(2*analogReadMilliVolts(36)))/1000.0f + 0.07f;
+  float voltage = ((float)(2*analogReadMilliVolts(BATT_PIN)))/1000.0f + 0.07f;
 
   if (voltage > 1 ) { // Only display if there is a valid reading
 

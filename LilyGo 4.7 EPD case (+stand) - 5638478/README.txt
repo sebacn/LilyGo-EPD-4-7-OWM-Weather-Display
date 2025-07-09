@@ -1,1 +1,0 @@
-LilyGo 4.7 EPD case (+stand) by atomic_craft on Thingiverse: https://www.thingiverse.com/thing:5638478

@@ -366,7 +366,7 @@ uint8_t wakeup_reason() {
     switch(ret){
         //dbgPrintln("Location variable: " + String(curr_loc));
 
-        case ESP_SLEEP_WAKEUP_UNDEFINED:        dbgPrintln("In case of deep sleep, reset was not caused by exit from deep sleep"); break;
+        //case ESP_SLEEP_WAKEUP_UNDEFINED:        dbgPrintln("In case of deep sleep, reset was not caused by exit from deep sleep"); break;
         case ESP_SLEEP_WAKEUP_ALL:              dbgPrintln("Not a wakeup cause, used to disable all wakeup sources with esp_sleep_disable_wakeup_source"); break;
         case ESP_SLEEP_WAKEUP_EXT0:             dbgPrintln("Wakeup caused by external signal using RTC_IO"); break;
         case ESP_SLEEP_WAKEUP_EXT1:             dbgPrintln("Wakeup caused by external signal using RTC_CNTL"); break;
