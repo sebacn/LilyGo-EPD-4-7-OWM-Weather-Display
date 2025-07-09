@@ -111,7 +111,7 @@ void writeLogInfo(){
 
     client.setConnectionParams(logSettings.INFLUXDB_URL, logSettings.INFLUXDB_ORG, logSettings.INFLUXDB_BUCKET, logSettings.INFLUXDB_TOKEN, ROOT_CA_INFLUXDB, MTLS_CERT, MTLS_PKEY);
 
-    Point pointDevice("LilyGo-T5-4.7-weather-wifi");
+    Point pointDevice("LilyGo-T5S3-weather");
     pointDevice.addTag("Mode", logInfo.mode2String());
     pointDevice.addTag("Config_Ok", String(logInfo.ConfigOk));
     pointDevice.addTag("Time_OK", String(logInfo.TimeFetchOk));

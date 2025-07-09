@@ -365,18 +365,29 @@ uint8_t wakeup_reason() {
     
     switch(ret){
         //dbgPrintln("Location variable: " + String(curr_loc));
+
+        case ESP_SLEEP_WAKEUP_UNDEFINED:        dbgPrintln("In case of deep sleep, reset was not caused by exit from deep sleep"); break;
+        case ESP_SLEEP_WAKEUP_ALL:              dbgPrintln("Not a wakeup cause, used to disable all wakeup sources with esp_sleep_disable_wakeup_source"); break;
+        case ESP_SLEEP_WAKEUP_EXT0:             dbgPrintln("Wakeup caused by external signal using RTC_IO"); break;
+        case ESP_SLEEP_WAKEUP_EXT1:             dbgPrintln("Wakeup caused by external signal using RTC_CNTL"); break;
+        case ESP_SLEEP_WAKEUP_TIMER:            dbgPrintln("Wakeup caused by timer"); break;
+        case ESP_SLEEP_WAKEUP_TOUCHPAD:         dbgPrintln("Wakeup caused by touchpad"); break;
+        case ESP_SLEEP_WAKEUP_ULP:              dbgPrintln("Wakeup caused by ULP program"); break;
+        case ESP_SLEEP_WAKEUP_GPIO:             dbgPrintln("Wakeup caused by GPIO (light sleep only on ESP32, S2 and S3)"); break;
+        case ESP_SLEEP_WAKEUP_UART:             dbgPrintln("Wakeup caused by UART (light sleep only)"); break;
+        case ESP_SLEEP_WAKEUP_WIFI:             dbgPrintln("Wakeup caused by WIFI (light sleep only)"); break;
+        case ESP_SLEEP_WAKEUP_COCPU:            dbgPrintln("Wakeup caused by COCPU int"); break;
+        case ESP_SLEEP_WAKEUP_COCPU_TRAP_TRIG:  dbgPrintln("Wakeup caused by COCPU crash"); break;
+        case ESP_SLEEP_WAKEUP_BT:               dbgPrintln("Wakeup caused by BT (light sleep only)"); break;
         
-        case ESP_SLEEP_WAKEUP_EXT0 : dbgPrintln("EXT0 Wakeup by ext signal RTC_IO -> GPIO39"); break;       
-        case ESP_SLEEP_WAKEUP_EXT1 : dbgPrintln("EXT1 Wakeup by ext signal RTC_CNTL -> GPIO34"); break;
-        case ESP_SLEEP_WAKEUP_TIMER : dbgPrintln("TIMER Wakeup"); break;
-        case ESP_SLEEP_WAKEUP_TOUCHPAD : dbgPrintln("TOUCHPAD Wakeupd"); break;
-        case ESP_SLEEP_WAKEUP_ULP : dbgPrintln("ULP Wakeup by ULP program"); break;
-        default : dbgPrintln("WAKEUP not caused by deep sleep: " + String(ret)); 
-            if (rtc_get_reset_reason(0) == POWERON_RESET && rtc_get_reset_reason(1) == EXT_CPU_RESET)
+        default : 
+            dbgPrintln("WAKEUP not caused by deep sleep: " + String(ret)); 
+
+            if (rtc_get_reset_reason(0) == POWERON_RESET && rtc_get_reset_reason(1) == NO_MEAN)
             {
                 ret = ESP_WAKEUP_RST_BUTTON;
             }
-            if (rtc_get_reset_reason(0) == SW_CPU_RESET && rtc_get_reset_reason(1) == SW_CPU_RESET)
+            if (rtc_get_reset_reason(0) == RTC_SW_CPU_RESET && rtc_get_reset_reason(1) == RTC_SW_CPU_RESET)
             {
                 ret = ESP_WAKEUP_SWCPU_RESET;
             }
@@ -457,7 +468,7 @@ void display_validating_mode() {
     epd_clear();        // Clear the screen
 
     setFont(OpenSans24B);
-    drawString(250, 25, "LilyGo T5 4.7 EPD47", LEFT);
+    drawString(250, 25, "LilyGo-T5S3-4.7", LEFT);
     setFont(OpenSans18B);
     drawString(15, 110, "Validate settings..", LEFT);
 
@@ -482,7 +493,7 @@ void display_config_mode(String network, String pass, String ip) {
     epd_clear();        // Clear the screen
 
     setFont(OpenSans24B);
-    drawString(250, 30, "LilyGo T5 4.7 EPD47", LEFT);
+    drawString(250, 30, "LilyGo-T5S3-4.7", LEFT);
     setFont(OpenSans18B);
     drawString(15, 130, "WiFi Configuration..", LEFT);
     setFont(OpenSans12B);
@@ -518,7 +529,7 @@ void display_failed_mode_and_sleep() {
     epd_clear();        // Clear the screen
 
     setFont(OpenSans24B);
-    drawString(250, 30, "LilyGo T5 4.7 EPD47", LEFT);
+    drawString(250, 30, "LilyGo-T5S3-4.7", LEFT);
     setFont(OpenSans18B);
     drawString(15, 130, "Connect to WiFi failed..", LEFT);
     setFont(OpenSans12B);
@@ -570,7 +581,7 @@ void IRAM_ATTR btn39Click(void)
 
 void run_config_server() {
     struct tm timeinfo;
-    String network = "LilyGo-T5-4.7-weather-wifi";
+    String network = "LilyGo-T5S3-weather-wifi";
     String pass = String(abs((int)esp_random())).substring(0, 4) + "0000";
 
     failed_count(true);

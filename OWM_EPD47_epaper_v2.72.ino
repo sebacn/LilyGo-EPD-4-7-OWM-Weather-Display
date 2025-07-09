@@ -2,6 +2,7 @@
 #error "Please enable PSRAM !!!"
 #endif
 #include <Arduino.h>            // In-built
+#include <math.h>
 #include <esp_task_wdt.h>       // In-built
 #include "freertos/FreeRTOS.h"  // In-built
 #include "freertos/task.h"      // In-built
@@ -22,6 +23,7 @@
 #include "config.h"
 #include "loginfo.h"
 #include "driver/rtc_io.h"
+#include "utilities.h"
 //#include "driver/adc.h"
 //#include "esp_adc_cal.h"
 
@@ -71,7 +73,6 @@ String  Date_str = "-- --- ----";
 int     wifi_signal, CurrentHour = 0, CurrentMin = 0, CurrentSec = 0, EventCnt = 0, vref = 1100;
 //################ PROGRAM VARIABLES and OBJECTS ##########################################
 #define max_readings 24 // Limited to 3-days here, but could go to 5-days = 40 as the data is issued  
-#define BUTTON_PIN_BITMASK(GPIO) (1ULL << GPIO)  // 2 ^ GPIO_NUMBER in hex
 
 Forecast_record_type  WxConditions[1];
 Forecast_record_type  WxForecast[max_readings];
@@ -314,7 +315,7 @@ void loop() {
 
 void run_imgdraw_mode()
 {
-    #define WAKEUP_GPIO GPIO_NUM_39
+    //#define WAKEUP_GPIO GPIO_NUM_39
     int img_idx;
     const uint8_t *img_data[3] = {ImgCat_data, ImgLandscape_data, ImgMinion_data};
 
@@ -340,11 +341,13 @@ void run_imgdraw_mode()
 
 void setup() {
 
+  Serial.begin(115200); 
+
+  delay(5000); // debug
+
   InitialiseSystem();
 
   boot_count++;
-
-  Serial.begin(115200); 
 
   dbgPrintln("\n\n=== WEATHER STATION ===\n\n");
 
@@ -352,14 +355,14 @@ void setup() {
 
   uint8_t wakeup = wakeup_reason();
   read_config_from_memory();
-
+/*
   esp_sleep_enable_ext0_wakeup(GPIO_NUM_39, 0); //wakeup for image draw
   rtc_gpio_pulldown_dis(GPIO_NUM_39);
   rtc_gpio_pullup_en(GPIO_NUM_39);
-
-  esp_sleep_enable_ext1_wakeup(BUTTON_PIN_BITMASK(GPIO_NUM_34), ESP_EXT1_WAKEUP_ALL_LOW); //wakeup for weater draw
-  rtc_gpio_pulldown_dis(GPIO_NUM_34);
-  rtc_gpio_pullup_en(GPIO_NUM_34); 
+*/
+  esp_sleep_enable_ext1_wakeup(_BV(BUTTON_1), ESP_EXT1_WAKEUP_ANY_LOW); //wakeup for weater draw
+  rtc_gpio_pulldown_dis((gpio_num_t)BUTTON_1);
+  rtc_gpio_pullup_en((gpio_num_t)BUTTON_1); 
 
   if (!settings.ConfigOk)
   {
