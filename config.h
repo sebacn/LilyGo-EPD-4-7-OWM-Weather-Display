@@ -27,8 +27,8 @@
 #include "imgs/wifi_cfg.h"
 
 #define MEMORY_ID "mem"
-#define ESP_WAKEUP_RST_BUTTON 25
-#define ESP_WAKEUP_SWCPU_RESET 26
+#define ESP_WAKEUP_RST_BUTTON  125
+#define ESP_WAKEUP_SWCPU_RESET 126
 
 enum alignment {LEFT, RIGHT, CENTER};
 
@@ -335,64 +335,78 @@ bool http_request_data(WiFiClientSecure& client, Request request, unsigned int r
 String print_reset_reason(RESET_REASON reason) {
     String ret = "";
     switch ( reason) {
-        case 1 : ret = "POWERON_RESET"; break;
-        case 3 : ret = "SW_RESET"; break;
-        case 4 : ret = "OWDT_RESET"; break;
-        case 5 : ret = "DEEPSLEEP_RESET"; break;
-        case 6 : ret = "SDIO_RESET"; break; 
-        case 7 : ret = "TG0WDT_SYS_RESET"; break;
-        case 8 : ret = "TG1WDT_SYS_RESET"; break;
-        case 9 : ret = "RTCWDT_SYS_RESET"; break;
-        case 10 : ret = "INTRUSION_RESET"; break;
-        case 11 : ret = "TGWDT_CPU_RESET"; break;
-        case 12 : ret = "SW_CPU_RESET"; break;
-        case 13 : ret = "RTCWDT_CPU_RESET"; break;
-        case 14 : ret = "EXT_CPU_RESET"; break;
-        case 15 : ret = "RTCWDT_BROWN_OUT_RESET"; break;
-        case 16 : ret = "RTCWDT_RTC_RESET"; break;
-        default : ret = "UNKNOWN";
+        case NO_MEAN :          ret = "NO_MEAN"; break;
+        case POWERON_RESET :    ret = "POWERON_RESET"; break;
+        case RTC_SW_SYS_RESET : ret = "RTC_SW_SYS_RESET"; break;
+        case DEEPSLEEP_RESET :  ret = "DEEPSLEEP_RESET"; break;
+        case TG0WDT_SYS_RESET : ret = "TG0WDT_SYS_RESET"; break;
+        case TG1WDT_SYS_RESET : ret = "TG1WDT_SYS_RESET"; break;
+        case RTCWDT_SYS_RESET : ret = "RTCWDT_SYS_RESET"; break;
+        case INTRUSION_RESET :  ret = "INTRUSION_RESET"; break;
+        case TG0WDT_CPU_RESET : ret = "TG0WDT_CPU_RESET"; break;
+        case RTC_SW_CPU_RESET : ret = "RTC_SW_CPU_RESET"; break;
+        case RTCWDT_CPU_RESET : ret = "RTCWDT_CPU_RESET"; break;
+        case RTCWDT_BROWN_OUT_RESET : ret = "RTCWDT_BROWN_OUT_RESET"; break;
+        case RTCWDT_RTC_RESET : ret = "RTCWDT_RTC_RESET"; break;
+        case TG1WDT_CPU_RESET : ret = "TG1WDT_CPU_RESET"; break;  /**<17, Time Group1 reset CPU*/
+        case SUPER_WDT_RESET :  ret = "SUPER_WDT_RESET"; break;     /**<18, super watchdog reset digital core and rtc module*/
+        case GLITCH_RTC_RESET : ret = "GLITCH_RTC_RESET"; break;   /**<19, glitch reset digital core and rtc module*/
+        case EFUSE_RESET :      ret = "EFUSE_RESET"; break;    /**<20, efuse reset digital core*/
+        case USB_UART_CHIP_RESET : ret = "USB_UART_CHIP_RESET"; break;   /**<21, usb uart reset digital core */
+        case USB_JTAG_CHIP_RESET : ret = "USB_JTAG_CHIP_RESET"; break;   /**<22, usb jtag reset digital core */
+        case POWER_GLITCH_RESET : ret = "POWER_GLITCH_RESET"; break; 
+        default : 
+            ret = "UNKNOWN " + String(ret);
     }
     return ret;
 }
 
+String print_wakeup_cause(esp_sleep_wakeup_cause_t _sleep_wakeup_cause)
+{
+    String ret = "";
+
+    switch(_sleep_wakeup_cause){
+        case ESP_SLEEP_WAKEUP_UNDEFINED: ret = "ESP_SLEEP_WAKEUP_UNDEFINED"; break;
+        case ESP_SLEEP_WAKEUP_ALL:       ret = "ESP_SLEEP_WAKEUP_ALL"; break;
+        case ESP_SLEEP_WAKEUP_EXT0:      ret = "ESP_SLEEP_WAKEUP_EXT0"; break;
+        case ESP_SLEEP_WAKEUP_EXT1:      ret = "ESP_SLEEP_WAKEUP_EXT1"; break;
+        case ESP_SLEEP_WAKEUP_TIMER:     ret = "ESP_SLEEP_WAKEUP_TIMER"; break;
+        case ESP_SLEEP_WAKEUP_TOUCHPAD:  ret = "ESP_SLEEP_WAKEUP_TOUCHPAD"; break;
+        case ESP_SLEEP_WAKEUP_ULP:       ret = "ESP_SLEEP_WAKEUP_ULP"; break;
+        case ESP_SLEEP_WAKEUP_GPIO:      ret = "ESP_SLEEP_WAKEUP_GPIO"; break;
+        case ESP_SLEEP_WAKEUP_UART:      ret = "ESP_SLEEP_WAKEUP_UART"; break;
+        case ESP_SLEEP_WAKEUP_WIFI:      ret = "ESP_SLEEP_WAKEUP_WIFI"; break;
+        case ESP_SLEEP_WAKEUP_COCPU:     ret = "ESP_SLEEP_WAKEUP_COCPU"; break;
+        case ESP_SLEEP_WAKEUP_COCPU_TRAP_TRIG: ret = "ESP_SLEEP_WAKEUP_COCPU_TRAP_TRIG"; break;
+        case ESP_SLEEP_WAKEUP_BT:        ret = "ESP_SLEEP_WAKEUP_BT"; break;
+        default : 
+            ret = "ESP_SLEEP_WAKEUP_" + String(ret); 
+        break;
+    }
+
+    return ret;
+}
 
 uint8_t wakeup_reason() {
 
-    uint8_t ret = (uint8_t)esp_sleep_get_wakeup_cause();
+    esp_sleep_wakeup_cause_t sleep_wakeup_cause = esp_sleep_get_wakeup_cause();
 
-    dbgPrintln("CPU0 reset reason: " + print_reset_reason(rtc_get_reset_reason(0)));
-    dbgPrintln("CPU1 reset reason: " + print_reset_reason(rtc_get_reset_reason(1)) + "\n");
+    RESET_REASON reset_reason0 = rtc_get_reset_reason(0);
+    RESET_REASON reset_reason1 = rtc_get_reset_reason(1);
+
+    dbgPrintln("CPU0 reset reason: " + print_reset_reason(reset_reason0));
+    dbgPrintln("CPU1 reset reason: " + print_reset_reason(reset_reason1));
+    dbgPrintln("SLEEP wakeup cause: " + print_wakeup_cause(sleep_wakeup_cause) + "\n");
+
+    uint8_t ret = (uint8_t)sleep_wakeup_cause;
     
-    switch(ret){
-        //dbgPrintln("Location variable: " + String(curr_loc));
-
-        //case ESP_SLEEP_WAKEUP_UNDEFINED:        dbgPrintln("In case of deep sleep, reset was not caused by exit from deep sleep"); break;
-        case ESP_SLEEP_WAKEUP_ALL:              dbgPrintln("Not a wakeup cause, used to disable all wakeup sources with esp_sleep_disable_wakeup_source"); break;
-        case ESP_SLEEP_WAKEUP_EXT0:             dbgPrintln("Wakeup caused by external signal using RTC_IO"); break;
-        case ESP_SLEEP_WAKEUP_EXT1:             dbgPrintln("Wakeup caused by external signal using RTC_CNTL"); break;
-        case ESP_SLEEP_WAKEUP_TIMER:            dbgPrintln("Wakeup caused by timer"); break;
-        case ESP_SLEEP_WAKEUP_TOUCHPAD:         dbgPrintln("Wakeup caused by touchpad"); break;
-        case ESP_SLEEP_WAKEUP_ULP:              dbgPrintln("Wakeup caused by ULP program"); break;
-        case ESP_SLEEP_WAKEUP_GPIO:             dbgPrintln("Wakeup caused by GPIO (light sleep only on ESP32, S2 and S3)"); break;
-        case ESP_SLEEP_WAKEUP_UART:             dbgPrintln("Wakeup caused by UART (light sleep only)"); break;
-        case ESP_SLEEP_WAKEUP_WIFI:             dbgPrintln("Wakeup caused by WIFI (light sleep only)"); break;
-        case ESP_SLEEP_WAKEUP_COCPU:            dbgPrintln("Wakeup caused by COCPU int"); break;
-        case ESP_SLEEP_WAKEUP_COCPU_TRAP_TRIG:  dbgPrintln("Wakeup caused by COCPU crash"); break;
-        case ESP_SLEEP_WAKEUP_BT:               dbgPrintln("Wakeup caused by BT (light sleep only)"); break;
-        
-        default : 
-            dbgPrintln("WAKEUP not caused by deep sleep: " + String(ret)); 
-
-            if (rtc_get_reset_reason(0) == POWERON_RESET && rtc_get_reset_reason(1) == NO_MEAN)
-            {
-                ret = ESP_WAKEUP_RST_BUTTON;
-            }
-            if (rtc_get_reset_reason(0) == RTC_SW_CPU_RESET && rtc_get_reset_reason(1) == RTC_SW_CPU_RESET)
-            {
-                ret = ESP_WAKEUP_SWCPU_RESET;
-            }
-        break;
+    if (sleep_wakeup_cause == ESP_SLEEP_WAKEUP_UNDEFINED
+     && reset_reason0 == RTC_SW_CPU_RESET 
+     && reset_reason1 == RTC_SW_CPU_RESET)
+    {
+        ret = ESP_WAKEUP_SWCPU_RESET;
     }
+
     return ret;
 }
 
@@ -582,7 +596,7 @@ void IRAM_ATTR btn39Click(void)
 void run_config_server() {
     struct tm timeinfo;
     String network = "LilyGo-T5S3-weather-wifi";
-    String pass = String(abs((int)esp_random())).substring(0, 4) + "0000";
+    String pass = "12345678"; //String(abs((int)esp_random())).substring(0, 4) + "0000";
 
     failed_count(true);
 

@@ -28,6 +28,7 @@
 
 
 #define BUTTON_1   (21)
+#define BUTTON_IO0 (GPIO_NUM_0)
 
 #define BATT_PIN   (14)
 

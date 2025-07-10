@@ -126,6 +126,7 @@ void run_operating_mode();
 void DisplayAirQualitySection(int x, int y);
 String dbgPrintln(String _str);
 void display_failed_mode_and_sleep();
+void deep_sleep_start();
 
 void collectAndWriteLog(int mode, bool is_time_fetched, bool is_weather_fetched, bool is_aq_fetched)
 {
@@ -245,7 +246,7 @@ void BeginSleep(bool _timeIsSet) {
 
   enable_timed_sleep(settings.SleepDuration, _timeIsSet);
 
-  esp_deep_sleep_start();  // Sleep for e.g. 30 minutes
+  deep_sleep_start();  // Sleep for e.g. 30 minutes
 }
 
 boolean SetupTime() {
@@ -330,20 +331,82 @@ void run_imgdraw_mode()
     epd_poweron();      // Switch on EPD display
     epd_clear();        // Clear the screen
 
-    Rect_t area = {.x = 0, .y = 0, .width  = 960, .height = 540};
-    epd_draw_grayscale_image(area, (uint8_t *) img_data[img_idx]);
+dbgPrintln("epd_poweron, epd_clear");
 
-    edp_update();       // Update the display to show the information
+    //Rect_t area = {.x = 0, .y = 0, .width  = 960, .height = 540};
+
+    epd_copy_to_framebuffer(epd_full_screen(), (uint8_t *) img_data[img_idx], framebuffer);
+    epd_draw_grayscale_image(epd_full_screen(), framebuffer);
+
+dbgPrintln("epd_draw_grayscale_image");
+
+    //edp_update();       // Update the display to show the information
+    epd_poweroff();
+    delay(2000);
     epd_poweroff_all(); // Switch off all power to EPD
 
-    esp_deep_sleep_start();
+dbgPrintln("edp_update, epd_poweroff_all");
+
+
+
+    deep_sleep_start();
+}
+
+void deep_sleep_start()
+{
+
+  gpio_set_direction(GPIO_NUM_46, GPIO_MODE_INPUT);
+
+  gpio_set_direction(BUTTON_IO0, GPIO_MODE_INPUT);
+  esp_sleep_enable_ext0_wakeup(BUTTON_IO0, 0); //wakeup for image draw
+  rtc_gpio_pulldown_dis(BUTTON_IO0);
+  rtc_gpio_pullup_en(BUTTON_IO0);
+
+  esp_sleep_enable_ext1_wakeup(_BV(BUTTON_1), ESP_EXT1_WAKEUP_ANY_LOW); //wakeup for weater draw
+  rtc_gpio_pulldown_dis((gpio_num_t)BUTTON_1);
+  rtc_gpio_pullup_en((gpio_num_t)BUTTON_1); 
+
+  esp_deep_sleep_start();
+}
+
+void wait_btnio0_up()
+{
+  int timeout = 0;
+  int btn_ok = 0;
+
+  Serial.begin(115200);
+  while (!Serial);
+  dbgPrintln("Waiting GPIO is up..");
+
+  while (btn_ok <= 3 && timeout < 100) //wait BUTTON_IO0 is UP (max 10 sec)
+  {
+    if (gpio_get_level(BUTTON_IO0) == 1)
+    {
+      btn_ok++;
+    }
+    else
+    {
+      btn_ok = 0;
+    }
+
+    delay(100);
+    timeout++;
+  }
+
+  if (btn_ok <= 3) 
+  {
+    dbgPrintln("GPIO 0 is low, reseting..");
+    delay(10000);
+    // do sw reset
+    esp_restart();
+  }
+
+  dbgPrintln("GPIO btn_ok: " + String(btn_ok) +", timeout: " + String(timeout) );
 }
 
 void setup() {
 
-  Serial.begin(115200); 
-
-  delay(5000); // debug
+  wait_btnio0_up();
 
   InitialiseSystem();
 
@@ -355,14 +418,6 @@ void setup() {
 
   uint8_t wakeup = wakeup_reason();
   read_config_from_memory();
-/*
-  esp_sleep_enable_ext0_wakeup(GPIO_NUM_39, 0); //wakeup for image draw
-  rtc_gpio_pulldown_dis(GPIO_NUM_39);
-  rtc_gpio_pullup_en(GPIO_NUM_39);
-*/
-  esp_sleep_enable_ext1_wakeup(_BV(BUTTON_1), ESP_EXT1_WAKEUP_ANY_LOW); //wakeup for weater draw
-  rtc_gpio_pulldown_dis((gpio_num_t)BUTTON_1);
-  rtc_gpio_pullup_en((gpio_num_t)BUTTON_1); 
 
   if (!settings.ConfigOk)
   {
