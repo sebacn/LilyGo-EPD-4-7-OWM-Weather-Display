@@ -331,23 +331,13 @@ void run_imgdraw_mode()
     epd_poweron();      // Switch on EPD display
     epd_clear();        // Clear the screen
 
-dbgPrintln("epd_poweron, epd_clear");
-
-    //Rect_t area = {.x = 0, .y = 0, .width  = 960, .height = 540};
-
     epd_copy_to_framebuffer(epd_full_screen(), (uint8_t *) img_data[img_idx], framebuffer);
     epd_draw_grayscale_image(epd_full_screen(), framebuffer);
-
-dbgPrintln("epd_draw_grayscale_image");
 
     //edp_update();       // Update the display to show the information
     epd_poweroff();
     delay(2000);
     epd_poweroff_all(); // Switch off all power to EPD
-
-dbgPrintln("edp_update, epd_poweroff_all");
-
-
 
     deep_sleep_start();
 }
@@ -355,12 +345,13 @@ dbgPrintln("edp_update, epd_poweroff_all");
 void deep_sleep_start()
 {
 
+  /*
   gpio_set_direction(GPIO_NUM_46, GPIO_MODE_INPUT);
 
   gpio_set_direction(BUTTON_IO0, GPIO_MODE_INPUT);
   esp_sleep_enable_ext0_wakeup(BUTTON_IO0, 0); //wakeup for image draw
   rtc_gpio_pulldown_dis(BUTTON_IO0);
-  rtc_gpio_pullup_en(BUTTON_IO0);
+  rtc_gpio_pullup_en(BUTTON_IO0); */
 
   esp_sleep_enable_ext1_wakeup(_BV(BUTTON_1), ESP_EXT1_WAKEUP_ANY_LOW); //wakeup for weater draw
   rtc_gpio_pulldown_dis((gpio_num_t)BUTTON_1);
@@ -369,44 +360,7 @@ void deep_sleep_start()
   esp_deep_sleep_start();
 }
 
-void wait_btnio0_up()
-{
-  int timeout = 0;
-  int btn_ok = 0;
-
-  Serial.begin(115200);
-  while (!Serial);
-  dbgPrintln("Waiting GPIO is up..");
-
-  while (btn_ok <= 3 && timeout < 100) //wait BUTTON_IO0 is UP (max 10 sec)
-  {
-    if (gpio_get_level(BUTTON_IO0) == 1)
-    {
-      btn_ok++;
-    }
-    else
-    {
-      btn_ok = 0;
-    }
-
-    delay(100);
-    timeout++;
-  }
-
-  if (btn_ok <= 3) 
-  {
-    dbgPrintln("GPIO 0 is low, reseting..");
-    delay(10000);
-    // do sw reset
-    esp_restart();
-  }
-
-  dbgPrintln("GPIO btn_ok: " + String(btn_ok) +", timeout: " + String(timeout) );
-}
-
 void setup() {
-
-  wait_btnio0_up();
 
   InitialiseSystem();
 
