@@ -2,7 +2,6 @@
 #error "Please enable PSRAM !!!"
 #endif
 #include <Arduino.h>            // In-built
-#include <math.h>
 #include <esp_task_wdt.h>       // In-built
 #include "freertos/FreeRTOS.h"  // In-built
 #include "freertos/task.h"      // In-built
@@ -336,7 +335,6 @@ void run_imgdraw_mode()
 
     //edp_update();       // Update the display to show the information
     epd_poweroff();
-    delay(2000);
     epd_poweroff_all(); // Switch off all power to EPD
 
     deep_sleep_start();
@@ -344,14 +342,12 @@ void run_imgdraw_mode()
 
 void deep_sleep_start()
 {
-
-  /*
   gpio_set_direction(GPIO_NUM_46, GPIO_MODE_INPUT);
 
-  gpio_set_direction(BUTTON_IO0, GPIO_MODE_INPUT);
-  esp_sleep_enable_ext0_wakeup(BUTTON_IO0, 0); //wakeup for image draw
-  rtc_gpio_pulldown_dis(BUTTON_IO0);
-  rtc_gpio_pullup_en(BUTTON_IO0); */
+  gpio_set_direction(BUTTON_0, GPIO_MODE_INPUT);
+  esp_sleep_enable_ext0_wakeup(BUTTON_0, 0); //wakeup for image draw
+  rtc_gpio_pulldown_dis(BUTTON_0);
+  rtc_gpio_pullup_en(BUTTON_0); 
 
   esp_sleep_enable_ext1_wakeup(_BV(BUTTON_1), ESP_EXT1_WAKEUP_ANY_LOW); //wakeup for weater draw
   rtc_gpio_pulldown_dis((gpio_num_t)BUTTON_1);
