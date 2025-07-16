@@ -1,7 +1,7 @@
-# LilyGo T5S V2.4 mod 
+# LilyGo T5S3 V2.4 mod 
 
-1) Removed 74HCT4094D
-<img src="/assets/T5-S3-mod.png" width="200" title="T5-S3-mod" alt="T5-S3-mod"/>
+1) Removed 74HCT4094D  
+- <img src="/assets/T5-S3-mod.png" width="200" title="T5-S3-mod" alt="T5-S3-mod"/>
 
 4) EPD connected to the following ESP32_S3 GPIO:  
 `EPD_LE=(GPIO_NUM_48)`  
