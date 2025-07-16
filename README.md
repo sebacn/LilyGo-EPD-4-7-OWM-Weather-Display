@@ -1,14 +1,14 @@
 # LilyGo T5S V2.4 mod 
 
 1) Removed 74HCT4094D
-[(assets/T5-S3-mod.png)]
+<img src="/assets/T5-S3-mod.png" width="200" title="T5-S3-mod" alt="T5-S3-mod"/>
 
-2) EPD connected to the following ESP32_S3 GPIO
-EPD_LE=(GPIO_NUM_48)
-EPD_STV=(GPIO_NUM_45)
-EPD_OE=(GPIO_NUM_12)
-EPD_MODE=(GPIO_NUM_13)
-EPD_PWR=(GPIO_NUM_39) ; //CS
+4) EPD connected to the following ESP32_S3 GPIO:  
+`EPD_LE=(GPIO_NUM_48)`  
+`EPD_STV=(GPIO_NUM_45)`  
+`EPD_OE=(GPIO_NUM_12)`  
+`EPD_MODE=(GPIO_NUM_13)`  
+`EPD_PWR=(GPIO_NUM_39) ; //CS`  
 
 # LilyGo-EPD-4-7-OWM-Weather-Display
 
