@@ -8,8 +8,18 @@ Do not commit unless the user asks. Do not put API keys, Wi-Fi passwords, or tok
 
 ## Hardware
 
-- Board: LILYGO T5 e-Paper 4.7 Inch ESP32-S3, touch version. Panel is ED047TC1, 960×540, 16 grayscale.
-- This unit is a hardware mod: the 74HCT4094 is removed. E-paper control pins are overridden in `platformio.ini` and must stay as they are: LE 48, STV 45, OE 12, MODE 13, PWR/CS 39.
+- Board: LilyGo T5S3 V2.4 mod, touch version of the T5 e-Paper 4.7 Inch ESP32-S3. Panel is ED047TC1, 960×540, 16 grayscale. Photo: `assets/T5-S3-mod.png`.
+- The 74HCT4094D is removed. The panel control lines are wired straight to the ESP32-S3. `platformio.ini` must keep `-DEPD_CTL_OVERRIDE` and these defines; `ed047tc1` drives them directly and will not build the override without all five:
+
+```text
+EPD_LE=(GPIO_NUM_48)
+EPD_STV=(GPIO_NUM_45)
+EPD_OE=(GPIO_NUM_12)
+EPD_MODE=(GPIO_NUM_13)
+EPD_PWR=(GPIO_NUM_39) ; //CS
+```
+
+Without `EPD_CTL_OVERRIDE` the driver still clocks the removed shift register (`CFG_DATA` GPIO 13, `CFG_CLK` GPIO 12, `CFG_STR` GPIO 0). Do not restore that path. `utilities.h` aliases `GPIO_SCLK` 48, `GPIO_MISO` 45, and `GPIO_CS` 39 are those same e-paper pins. Do not reuse them for SPI or the SD card.
 - Touch is GT911 on I2C. SDA GPIO 18, SCL GPIO 17, interrupt GPIO 47. Addresses 0x14 or 0x5D. Init matches LilyGo `examples/touch/touch.ino`: after deep-sleep wake wait about 1 s, pulse INT high, scan both addresses, `setSwapXY(true)`, `setMirrorXY(false, true)`, poll at least every 300 ms.
 - GPIO 47 is not an RTC pin, so it cannot wake deep sleep. LilyGo’s documented fix is a wire from GPIO 47 to GPIO 10. Firmware wakes on GPIO 10 (active low) plus the buttons. Without that wire, touch works only during the awake window after a refresh.
 - Do not call `touch.sleep()` before deep sleep. That holds INT low and stops the controller from generating a wake pulse. Leaving GT911 awake costs a few milliamps.
@@ -53,7 +63,7 @@ Main’s forecast strip is only as many calendar days as fit in `max_readings` (
 
 ## Device settings
 
-Touch can change units (`M` metric or `I` imperial), sleep minutes (5–60, step 5), wake hour, sleep hour, and debug-log enable. **Save** writes the existing Preferences namespace `mem` through `save_config_to_memory()`. Do not invent a second settings store. City, Wi-Fi, API keys, and Influx fields stay on **Web setup**, which starts the existing WiFiManager portal (`LilyGo-T5S3-weather-wifi`).
+Touch can change units (`M` metric or `I` imperial), sleep minutes (5–60, step 5), wake hour, sleep hour, and debug-log enable. **Save** writes the existing Preferences namespace `mem` through `save_config_to_memory()`. Do not invent a second settings store. City, Wi-Fi, API keys, Influx fields, and the mTLS client certificate and private key stay on **Web setup**, which starts the existing WiFiManager portal (`LilyGo-T5S3-weather-wifi`). Those PEMs are Preferences strings (`MTLS_CERT`, `MTLS_PKEY`), not firmware constants. Empty PEMs skip client authentication. Do not print the certificate or private key.
 
 Changing units marks weather stale so the next weather layout refetches. Unsaved edits die at sleep.
 

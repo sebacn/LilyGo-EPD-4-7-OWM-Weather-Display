@@ -444,6 +444,8 @@ void read_config_from_memory() {
     logSettings.INFLUXDB_BUCKET = preferences.getString("INFLUXDB_BUCKET", "");
     logSettings.INFLUXDB_ORG = preferences.getString("INFLUXDB_ORG", "");
     logSettings.INFLUXDB_TOKEN = preferences.getString("INFLUXDB_TOKEN", "");
+    logSettings.MTLS_CERT = flattenPem(preferences.getString("MTLS_CERT", ""));
+    logSettings.MTLS_PKEY = flattenPem(preferences.getString("MTLS_PKEY", ""));
     
     preferences.end();
 
@@ -476,6 +478,8 @@ void save_config_to_memory() {
     preferences.putString("INFLUXDB_BUCKET", logSettings.INFLUXDB_BUCKET);
     preferences.putString("INFLUXDB_ORG", logSettings.INFLUXDB_ORG);
     preferences.putString("INFLUXDB_TOKEN", logSettings.INFLUXDB_TOKEN);
+    preferences.putString("MTLS_CERT", logSettings.MTLS_CERT);
+    preferences.putString("MTLS_PKEY", logSettings.MTLS_PKEY);
 
     preferences.end();
 
@@ -636,7 +640,9 @@ void run_config_server() {
     WiFiManagerParameter parmINFLUXDB_URL("parmINFLUXDB_URL", "Log INFLUXDB_URL", logSettings.INFLUXDB_URL.c_str(), 50);
     WiFiManagerParameter parmINFLUXDB_BUCKET("parmINFLUXDB_BUCKET", "Log INFLUXDB_BUCKET", logSettings.INFLUXDB_BUCKET.c_str(), 50);
     WiFiManagerParameter parmINFLUXDB_ORG("parmINFLUXDB_ORG", "Log INFLUXDB_ORG", logSettings.INFLUXDB_ORG.c_str(), 50);
-    WiFiManagerParameter parmINFLUXDB_TOKEN("parmINFLUXDB_TOKEN", "LogINFLUXDB_TOKEN", logSettings.INFLUXDB_TOKEN.c_str(), 100); 
+    WiFiManagerParameter parmINFLUXDB_TOKEN("parmINFLUXDB_TOKEN", "LogINFLUXDB_TOKEN", logSettings.INFLUXDB_TOKEN.c_str(), 100);
+    WiFiManagerParameter parmMTLS_CERT("parmMTLS_CERT", "Log MTLS certificate PEM", logSettings.MTLS_CERT.c_str(), MTLS_PEM_MAX, "placeholder=\"-----BEGIN CERTIFICATE----- ...\"");
+    WiFiManagerParameter parmMTLS_PKEY("parmMTLS_PKEY", "Log MTLS private key PEM", logSettings.MTLS_PKEY.c_str(), MTLS_PEM_MAX, "placeholder=\"-----BEGIN PRIVATE KEY----- ...\""); 
 
     WiFiManager wm;
 
@@ -653,7 +659,9 @@ void run_config_server() {
     wm.addParameter(&parmINFLUXDB_URL);
     wm.addParameter(&parmINFLUXDB_BUCKET);
     wm.addParameter(&parmINFLUXDB_ORG);
-    wm.addParameter(&parmINFLUXDB_TOKEN);   
+    wm.addParameter(&parmINFLUXDB_TOKEN);
+    wm.addParameter(&parmMTLS_CERT);
+    wm.addParameter(&parmMTLS_PKEY);   
 
     //wm.setTimeout(120);
     wm.setConfigPortalTimeout(60*5); //5 min
@@ -723,7 +731,9 @@ void run_config_server() {
             logSettings.INFLUXDB_URL = String(parmINFLUXDB_URL.getValue());
             logSettings.INFLUXDB_BUCKET = String(parmINFLUXDB_BUCKET.getValue());
             logSettings.INFLUXDB_ORG = String(parmINFLUXDB_ORG.getValue());
-            logSettings.INFLUXDB_TOKEN = String(parmINFLUXDB_TOKEN.getValue());         
+            logSettings.INFLUXDB_TOKEN = String(parmINFLUXDB_TOKEN.getValue());
+            logSettings.MTLS_CERT = flattenPem(String(parmMTLS_CERT.getValue()));
+            logSettings.MTLS_PKEY = flattenPem(String(parmMTLS_PKEY.getValue()));         
             
             settings.ConfigOk = false; //validate after save
             save_config_to_memory();  
