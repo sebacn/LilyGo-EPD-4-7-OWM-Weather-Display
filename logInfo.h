@@ -20,16 +20,31 @@ extern String infoPrintln(String _str);
 extern Forecast_record_type  WxConditions[1];
 extern Forecast_record_type  WxForecast[max_readings];
 
-// Server certificate in PEM format, placed in the program (flash) memory to save RAM
+// Server CA stays in flash. The mTLS client certificate and key are portal settings.
 constexpr char const *ROOT_CA_INFLUXDB = ROOT_CA_POSITIONSTACK;
 
-const char MTLS_CERT[] PROGMEM =  R"EOF(
------BEGIN CERTIFICATE-----
------END CERTIFICATE-----)EOF";
+// NVS strings are limited to 4000 bytes. WiFiManager prints the length in four digits.
+#define MTLS_PEM_MAX 3500
 
-const char MTLS_PKEY[] PROGMEM =  R"EOF(
------BEGIN PRIVATE KEY-----
------END PRIVATE KEY-----)EOF";
+// Portal fields are single-line. PEM parsers skip spaces, so line breaks can be flattened.
+inline String flattenPem(const String& in) {
+    String out;
+    out.reserve(in.length());
+    bool gap = false;
+    for (unsigned i = 0; i < in.length(); i++) {
+        char c = in.charAt(i);
+        if (c == '\r' || c == '\n' || c == '\t' || c == ' ') {
+            if (!gap && out.length() > 0) {
+                out += ' ';
+                gap = true;
+            }
+        } else {
+            out += c;
+            gap = false;
+        }
+    }
+    return out;
+}
 
 struct LogSettings {
     // InfluxDB 2 server or cloud url, e.g. https://eu-central-1-1.aws.cloud2.influxdata.com (Use: InfluxDB UI -> Load Data -> Client Libraries)
@@ -40,6 +55,9 @@ struct LogSettings {
     String INFLUXDB_ORG; // "org"
     // InfluxDB 2 bucket name (Use: InfluxDB UI -> Load Data -> Buckets)
     String INFLUXDB_BUCKET; // "bucket"
+    // Client certificate and private key for mTLS. Empty skips client authentication.
+    String MTLS_CERT;
+    String MTLS_PKEY;
 
     void print()
     {
@@ -47,6 +65,8 @@ struct LogSettings {
         dbgPrintln("INFLUXDB_BUCKET: " + INFLUXDB_BUCKET);
         dbgPrintln("INFLUXDB_ORG: " + INFLUXDB_ORG);
         dbgPrintln("INFLUXDB_TOKEN: " + INFLUXDB_TOKEN);
+        dbgPrintln("MTLS_CERT: " + String(MTLS_CERT.length() ? "set" : "empty"));
+        dbgPrintln("MTLS_PKEY: " + String(MTLS_PKEY.length() ? "set" : "empty"));
     }
         
 };
@@ -109,7 +129,11 @@ void writeLogInfo(){
         return;
     }
 
-    client.setConnectionParams(logSettings.INFLUXDB_URL, logSettings.INFLUXDB_ORG, logSettings.INFLUXDB_BUCKET, logSettings.INFLUXDB_TOKEN, ROOT_CA_INFLUXDB, MTLS_CERT, MTLS_PKEY);
+    dbgPrintln((logSettings.MTLS_CERT.length() && logSettings.MTLS_PKEY.length())
+        ? "InfluxDBClient: mTLS client certificate set"
+        : "InfluxDBClient: mTLS client certificate not set");
+
+    client.setConnectionParams(logSettings.INFLUXDB_URL, logSettings.INFLUXDB_ORG, logSettings.INFLUXDB_BUCKET, logSettings.INFLUXDB_TOKEN, ROOT_CA_INFLUXDB, logSettings.MTLS_CERT.c_str(), logSettings.MTLS_PKEY.c_str());
 
     Point pointDevice("LilyGo-T5S3-weather");
     pointDevice.addTag("Mode", logInfo.mode2String());

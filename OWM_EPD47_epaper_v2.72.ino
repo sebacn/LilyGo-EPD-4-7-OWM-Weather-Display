@@ -1204,7 +1204,8 @@ void DisplayDeviceScreen() {
   drawString(20, y, "OWM key        " + keyStatus(settings.OwmApikey), LEFT); y += 26;
   drawString(20, y, "PositionStack  " + keyStatus(settings.PositionStackKey), LEFT); y += 26;
   drawString(20, y, "TimeZoneDB     " + keyStatus(settings.TimezBBKey), LEFT); y += 26;
-  String influx = logSettings.INFLUXDB_URL.length() ? clipText(logSettings.INFLUXDB_BUCKET, 18) : "off";
+  String influx = logSettings.INFLUXDB_URL.length() ? clipText(logSettings.INFLUXDB_BUCKET, 14) : "off";
+  if (logSettings.MTLS_CERT.length() && logSettings.MTLS_PKEY.length()) influx += "  mTLS";
   drawString(20, y, "Influx         " + influx, LEFT); y += 36;
   setFont(OpenSans10B);
   drawString(20, y, "City, WiFi and API keys", LEFT); y += 18;
