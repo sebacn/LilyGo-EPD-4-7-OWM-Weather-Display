@@ -61,6 +61,7 @@ void setFont(GFXfont const & font);
 boolean SetupTime();
 void request_render_weather(bool _clearDisplay = false);
 void BeginSleep(bool _timeIsSet);
+void deep_sleep_start();
 //boolean UpdateLocalTime();
 //extern bool DecodeWeather(WiFiClient& json, String Type);
 void run_validating_mode();
@@ -89,8 +90,14 @@ T nested_value_or_default(JsonObject parent_jobj, String key, String nested_key,
     }
 }
 
+void sdCaptureLine(const String& line);
+void sdPrepareSleep();
+
 String infoPrintln(String _str) {
-    Serial.printf("%.03f ",millis()/1000.0f); Serial.println("[I] " + _str);
+    String line = String(millis() / 1000.0f, 3) + " [I] " + _str + "\n";
+    Serial.print(line);
+    Serial.flush();
+    sdCaptureLine(line);
     return _str + '\n';
 }
 
@@ -129,7 +136,10 @@ String dbgPrintln(String _str) {
     #if defined(PROJ_DEBUG_ENABLE)
     if (true) //settings.DbgLogEnable)
     {
-        Serial.printf("%.03f ",millis()/1000.0f); Serial.println("[D] " + _str);
+        String line = String(millis() / 1000.0f, 3) + " [D] " + _str + "\n";
+        Serial.print(line);
+        Serial.flush();
+        sdCaptureLine(line);
     }    
     #endif
     return _str + '\n';
@@ -568,7 +578,7 @@ void display_failed_mode_and_sleep() {
 
     esp_sleep_enable_timer_wakeup(((uint64_t)ts.totalseconds())*1000000L);
 
-    esp_deep_sleep_start(); 
+    deep_sleep_start();
 }
 
 void display_print_text(GFXfont const & font, int _x, int _y, String _str, bool _clear = false) {
@@ -683,6 +693,7 @@ void run_config_server() {
         epd_poweroff_all();
         //uint64_t sleep_time_micro_sec = 86400000000;//24* 60 * 1000 * 1000 * 60; //24h
         esp_sleep_enable_timer_wakeup(86400000000ULL*30ULL); //sleep 30 days
+        sdPrepareSleep();
         esp_deep_sleep_start(); 
 
         delay(5000);

@@ -28,4 +28,13 @@ typedef struct { // For current Day and Day 1, 2, 3, etc
   float  UVI;
 } Forecast_record_type;
 
+struct DaySlot {
+  int key;
+  int labelDt;
+  float high;
+  float low;
+  char icon[8];
+  int iconScore;
+};
+
 #endif /* ifndef FORECAST_RECORD_H_ */

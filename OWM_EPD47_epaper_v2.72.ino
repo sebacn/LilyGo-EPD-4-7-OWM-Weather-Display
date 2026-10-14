@@ -13,6 +13,7 @@
 
 #include <WiFi.h>               // In-built
 #include <SPI.h>                // In-built
+#include <SD.h>
 //#include <time.h>               // In-built
 #include <RTClib.h>
 
@@ -23,6 +24,8 @@
 #include "loginfo.h"
 #include "driver/rtc_io.h"
 #include "utilities.h"
+#include <Wire.h>
+#include <TouchDrvGT911.hpp>
 //#include "driver/adc.h"
 //#include "esp_adc_cal.h"
 
@@ -46,6 +49,22 @@ To:
 
 #define SCREEN_WIDTH   EPD_WIDTH
 #define SCREEN_HEIGHT  EPD_HEIGHT
+// GPIO47 (touch INT) is not an RTC pin. LilyGo documents tying it to GPIO10 so a tap can wake deep sleep.
+#define TOUCH_WAKE_PIN GPIO_NUM_10
+#define TOUCH_SESSION_MS 15000
+
+#define BTN_UNITS_M        1
+#define BTN_UNITS_I        2
+#define BTN_SLEEP_DEC      3
+#define BTN_SLEEP_INC      4
+#define BTN_WAKE_DEC       5
+#define BTN_WAKE_INC       6
+#define BTN_SLEEPHOUR_DEC  7
+#define BTN_SLEEPHOUR_INC  8
+#define BTN_DBG_OFF        9
+#define BTN_DBG_ON         10
+#define BTN_SAVE           11
+#define BTN_WEB            12
 
 //################  VERSION  ##################################################
 String version = "2.7 / 4.7in";  // Programme version, see change log at end
@@ -89,6 +108,59 @@ long StartTime       = 0;
 long SleepTimer      = 0;
 long Delta           = 30; // ESP32 rtc speed compensation, prevents display at xx:59:yy and then xx:00:yy (one minute later) to save power
 RTC_DATA_ATTR int boot_count;
+
+// Bottom touch menu selects these. The weather button still steps through them. Timed wake keeps the current one.
+#define LAYOUT_FULL     0
+#define LAYOUT_MAIN     1
+#define LAYOUT_GRAPHS   2
+#define LAYOUT_DETAILS  3
+#define LAYOUT_DEVICE   4
+#define LAYOUT_COUNT    5
+
+RTC_DATA_ATTR uint8_t display_layout = LAYOUT_FULL;
+RTC_DATA_ATTR bool display_layout_ready = false;
+bool weatherReady = false;
+bool menuVisible = false;
+String deviceNotice;
+
+const char* layoutName(uint8_t id) {
+  switch (id) {
+    case LAYOUT_MAIN:    return "Main";
+    case LAYOUT_GRAPHS:  return "Graphs";
+    case LAYOUT_DETAILS: return "Details";
+    case LAYOUT_DEVICE:  return "Device";
+    default:             return "Full";
+  }
+}
+
+String layoutCaption() {
+  return String(layoutName(display_layout)) + "  " + String(display_layout + 1) + "/" + String(LAYOUT_COUNT);
+}
+
+void loadDisplayLayout() {
+  if (!display_layout_ready) {
+    preferences.begin("layout", true);
+    display_layout = preferences.getUChar("id", LAYOUT_FULL);
+    preferences.end();
+    display_layout_ready = true;
+  }
+  if (display_layout >= LAYOUT_COUNT) display_layout = LAYOUT_FULL;
+}
+
+void setDisplayLayout(uint8_t id) {
+  loadDisplayLayout();
+  if (id >= LAYOUT_COUNT) id = LAYOUT_FULL;
+  display_layout = id;
+  preferences.begin("layout", false);
+  preferences.putUChar("id", display_layout);
+  preferences.end();
+  dbgPrintln("Display layout: " + layoutCaption());
+}
+
+void advanceDisplayLayout() {
+  loadDisplayLayout();
+  setDisplayLayout((display_layout + 1) % LAYOUT_COUNT);
+}
 
 //fonts
 #include "fonts/opensans5cb_special2.h"
@@ -294,15 +366,218 @@ void StopWiFi() {
   dbgPrintln("WiFi switched Off");
 }
 
+bool sdReady = false;
+bool sdWriting = false;
+bool sdDatedLogReady = false;
+String sdLogBuffer;
+
+String sdDayStamp() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo, 0)) return "";
+  char buf[16];
+  strftime(buf, sizeof(buf), "%Y-%m-%d", &timeinfo);
+  return String(buf);
+}
+
+String sdIsoStamp() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo, 0)) return "";
+  char buf[24];
+  strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &timeinfo);
+  return String(buf);
+}
+
+String sdLogPath() {
+  String day = sdDayStamp();
+  if (day.length()) return "/log/" + day + ".log";
+  return "/log/pending.log";
+}
+
+void sdEnsureLogFile() {
+  if (!sdReady) return;
+  String path = sdLogPath();
+  if (SD.exists(path)) return;
+  File file = SD.open(path, FILE_WRITE);
+  if (!file) return;
+  file.println("--- " + path + " ---");
+  file.close();
+}
+
+void sdFlushLog() {
+  if (!sdReady || sdWriting || !sdLogBuffer.length()) return;
+  sdWriting = true;
+  sdEnsureLogFile();
+  File file = SD.open(sdLogPath(), FILE_APPEND);
+  if (file) {
+    file.print(sdLogBuffer);
+    file.close();
+    sdLogBuffer = "";
+  }
+  sdWriting = false;
+}
+
+void sdCaptureLine(const String& line) {
+  if (!sdReady || sdWriting) return;
+  if (sdLogBuffer.length() > 16000) return;
+  sdLogBuffer += line;
+  if (sdLogBuffer.length() >= 2500) sdFlushLog();
+}
+
+void sdOnClockReady() {
+  if (!sdReady) return;
+  if (!sdDatedLogReady && sdDayStamp().length()) {
+    sdDatedLogReady = true;
+    String dayPath = sdLogPath();
+    if (SD.exists("/log/pending.log")) {
+      File in = SD.open("/log/pending.log", FILE_READ);
+      File out = SD.open(dayPath, FILE_APPEND);
+      if (!out) out = SD.open(dayPath, FILE_WRITE);
+      if (in && out) {
+        out.println("--- earlier boot log ---");
+        while (in.available()) out.write(in.read());
+      }
+      if (in) in.close();
+      if (out) out.close();
+      SD.remove("/log/pending.log");
+    }
+  }
+  sdEnsureLogFile();
+  sdFlushLog();
+}
+
+void sdPrepareSleep() {
+  sdFlushLog();
+  if (!sdReady) return;
+  SD.end();
+  sdReady = false;
+}
+
+bool initSdCard() {
+  pinMode(SD_CS, OUTPUT);
+  digitalWrite(SD_CS, HIGH);
+  SPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
+  if (!SD.begin(SD_CS, SPI, 4000000)) {
+    Serial.println("[D] SD card not found");
+    Serial.flush();
+    return false;
+  }
+  sdReady = true;
+  SD.mkdir("/log");
+  SD.mkdir("/weather");
+  sdEnsureLogFile();
+  dbgPrintln("SD card mounted, log " + sdLogPath());
+  return true;
+}
+
+bool appendJsonArray(const String& path, const String& object) {
+  if (!SD.exists(path)) {
+    File file = SD.open(path, FILE_WRITE);
+    if (!file) return false;
+    file.print("[\n");
+    file.print(object);
+    file.print("\n]\n");
+    file.close();
+    return true;
+  }
+  File file = SD.open(path, "r+");
+  if (!file) return false;
+  size_t size = file.size();
+  if (size < 3) {
+    file.close();
+    return false;
+  }
+  file.seek(size - 3);
+  file.print(",\n");
+  file.print(object);
+  file.print("\n]\n");
+  file.close();
+  return true;
+}
+
+void logWeatherToSd() {
+  if (!sdReady) return;
+  sdOnClockReady();
+  String day = sdDayStamp();
+  if (!day.length()) {
+    dbgPrintln("SD weather log skipped, clock is not set");
+    return;
+  }
+
+  JsonDocument doc;
+  doc["time"] = sdIsoStamp();
+  doc["city"] = settings.City;
+  doc["lat"] = settings.Latitude;
+  doc["lon"] = settings.Longitude;
+  doc["units"] = settings.Units;
+
+  JsonObject current = doc["current"].to<JsonObject>();
+  current["dt"] = WxConditions[0].Dt;
+  current["temp"] = WxConditions[0].Temperature;
+  current["feels_like"] = WxConditions[0].FeelsLike;
+  current["humidity"] = WxConditions[0].Humidity;
+  current["pressure"] = WxConditions[0].Pressure;
+  current["wind_speed"] = WxConditions[0].Windspeed;
+  current["wind_deg"] = WxConditions[0].Winddir;
+  current["clouds"] = WxConditions[0].Cloudcover;
+  current["visibility"] = WxConditions[0].Visibility;
+  current["uvi"] = WxConditions[0].UVI;
+  current["description"] = WxConditions[0].Forecast0;
+  current["icon"] = WxConditions[0].Icon;
+  current["sunrise"] = WxConditions[0].Sunrise;
+  current["sunset"] = WxConditions[0].Sunset;
+  current["high"] = WxConditions[0].High;
+  current["low"] = WxConditions[0].Low;
+
+  JsonObject air = doc["air"].to<JsonObject>();
+  air["aqi"] = WxAirQ.AQI;
+  air["co"] = WxAirQ.CO;
+  air["no"] = WxAirQ.NO;
+  air["no2"] = WxAirQ.NO2;
+  air["o3"] = WxAirQ.O3;
+  air["so2"] = WxAirQ.SO2;
+  air["pm2_5"] = WxAirQ.PM2_5;
+  air["pm10"] = WxAirQ.PM10;
+  air["nh3"] = WxAirQ.NH3;
+
+  JsonArray forecast = doc["forecast"].to<JsonArray>();
+  for (int i = 0; i < max_readings; i++) {
+    if (!WxForecast[i].Dt) continue;
+    JsonObject slot = forecast.add<JsonObject>();
+    slot["dt"] = WxForecast[i].Dt;
+    slot["temp"] = WxForecast[i].Temperature;
+    slot["temp_min"] = WxForecast[i].Low;
+    slot["temp_max"] = WxForecast[i].High;
+    slot["humidity"] = WxForecast[i].Humidity;
+    slot["pressure"] = WxForecast[i].Pressure;
+    slot["rain"] = WxForecast[i].Rainfall;
+    slot["snow"] = WxForecast[i].Snowfall;
+    slot["icon"] = WxForecast[i].Icon;
+  }
+
+  String body;
+  serializeJson(doc, body);
+  String path = "/weather/" + day + ".json";
+  if (appendJsonArray(path, body)) dbgPrintln("SD weather saved " + path + " (" + String(body.length()) + " bytes)");
+  else dbgPrintln("SD weather save failed " + path);
+}
+
 void InitialiseSystem() {
   StartTime = millis();
   Serial.begin(115200);
-  while (!Serial);
+  Serial.setTxBufferSize(1024);
+  uint32_t serialWait = millis();
+  while (!Serial && millis() - serialWait < 3000) delay(10);
+  delay(200);
   dbgPrintln(String(__FILE__) + " Starting...");
+  dbgPrintln("USB CDC serial 115200, chip " + String(ESP.getChipModel())
+             + " rev " + String(ESP.getChipRevision())
+             + ", heap " + String(ESP.getFreeHeap())
+             + ", psram " + String(ESP.getFreePsram()));
   epd_init();
   framebuffer = (uint8_t *)ps_calloc(sizeof(uint8_t), EPD_WIDTH * EPD_HEIGHT / 2);
   if (!framebuffer) dbgPrintln("Memory alloc failed!");
   memset(framebuffer, 0xFF, EPD_WIDTH * EPD_HEIGHT / 2);
+  initSdCard();
 }
 
 void loop() {
@@ -349,10 +624,22 @@ void deep_sleep_start()
   rtc_gpio_pulldown_dis(BUTTON_0);
   rtc_gpio_pullup_en(BUTTON_0); 
 
-  esp_sleep_enable_ext1_wakeup(_BV(BUTTON_1), ESP_EXT1_WAKEUP_ANY_LOW); //wakeup for weater draw
+  // Leave the touch interrupt as an input. GPIO10 wakes deep sleep when it is tied to GPIO47.
+  pinMode(TOUCH_INT, INPUT);
+  uint64_t wakeMask = (1ULL << BUTTON_1) | (1ULL << TOUCH_WAKE_PIN);
+  esp_sleep_enable_ext1_wakeup(wakeMask, ESP_EXT1_WAKEUP_ANY_LOW);
   rtc_gpio_pulldown_dis((gpio_num_t)BUTTON_1);
-  rtc_gpio_pullup_en((gpio_num_t)BUTTON_1); 
+  rtc_gpio_pullup_en((gpio_num_t)BUTTON_1);
+  rtc_gpio_init(TOUCH_WAKE_PIN);
+  rtc_gpio_set_direction(TOUCH_WAKE_PIN, RTC_GPIO_MODE_INPUT_ONLY);
+  rtc_gpio_pulldown_dis(TOUCH_WAKE_PIN);
+  rtc_gpio_pullup_en(TOUCH_WAKE_PIN);
 
+  dbgPrintln(String("Deep sleep. Wake on timer, GPIO0, GPIO21, or GPIO10 if tied to touch INT GPIO47.")
+             + " INT47=" + String(digitalRead(TOUCH_INT))
+             + " GPIO10=" + String(gpio_get_level(TOUCH_WAKE_PIN))
+             + " layout=" + layoutCaption());
+  sdPrepareSleep();
   esp_deep_sleep_start();
 }
 
@@ -368,6 +655,11 @@ void setup() {
 
   uint8_t wakeup = wakeup_reason();
   read_config_from_memory();
+  loadDisplayLayout();
+  dbgPrintln("Boot " + String(boot_count)
+             + ", layout " + layoutCaption()
+             + ", wakeup " + String(wakeup)
+             + ", ext1 mask 0x" + String((uint32_t)esp_sleep_get_ext1_wakeup_status(), HEX));
 
   if (!settings.ConfigOk)
   {
@@ -378,14 +670,29 @@ void setup() {
   {
     switch (wakeup)
     {
-      case ESP_SLEEP_WAKEUP_EXT0: //rst button
+      case ESP_SLEEP_WAKEUP_EXT0: // boot button: image pages
         dbgPrintln("MODE: Draw image");
         run_imgdraw_mode();
         break;
 
+      case ESP_SLEEP_WAKEUP_EXT1: { // weather button, or touch INT via GPIO10
+        uint64_t pins = esp_sleep_get_ext1_wakeup_status();
+        dbgPrintln("EXT1 pins 0x" + String((uint32_t)pins, HEX)
+                   + (pins & (1ULL << TOUCH_WAKE_PIN) ? " touch" : "")
+                   + (pins & (1ULL << BUTTON_1) ? " button" : ""));
+        if (pins & (1ULL << TOUCH_WAKE_PIN)) {
+          dbgPrintln("MODE: Touch wake");
+          handleWakeTouch();
+        } else {
+          advanceDisplayLayout();
+        }
+        dbgPrintln("MODE: Operating");
+        run_operating_mode();
+        break;
+      }
+
       case ESP_SLEEP_WAKEUP_TIMER:
-      case ESP_SLEEP_WAKEUP_EXT1:  
-      case ESP_WAKEUP_SWCPU_RESET: //after validate  
+      case ESP_WAKEUP_SWCPU_RESET: //after validate
         dbgPrintln("MODE: Operating");
         run_operating_mode();
         break;
@@ -400,17 +707,23 @@ void setup() {
 }
 
 void run_operating_mode() {
- 
+    if (display_layout == LAYOUT_DEVICE) {
+      paintScreen();
+      serviceTouchThenSleep();
+      return;
+    }
+
     if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
-      request_render_weather(false); 
+      request_render_weather(false);
       failed_count(true);
-      BeginSleep(true);
+      if (weatherReady) serviceTouchThenSleep();
+      else BeginSleep(true);
     }
     else
     {
       display_failed_mode_and_sleep();
     }
-  
+
     BeginSleep(false);
 }
 
@@ -445,11 +758,9 @@ void request_render_weather(bool _clearDisplay)
 
   dbgPrintln("Received all weather data...");
   if (RxWeather && RxForecast && RxAqidata) { // Only if received both Weather or Forecast proceed
-    epd_poweron();      // Switch on EPD display
-    epd_clear();        // Clear the screen
-    DisplayWeather();   // Display the weather data
-    edp_update();       // Update the display to show the information
-    epd_poweroff_all(); // Switch off all power to EPD
+    weatherReady = true;
+    logWeatherToSd();
+    paintScreen();
   }
 }
 
@@ -632,15 +943,435 @@ String TitleCase(String text) {
   else return text;
 }
 
-void DisplayWeather() {                          // 4.7" e-paper display is 960x540 resolution
+TouchDrvGT911 panelTouch;
+bool touchReady = false;
+uint32_t nextTouchPoll = 0;
+
+struct UiButton {
+  int x;
+  int y;
+  int w;
+  int h;
+  int id;
+};
+
+UiButton deviceButtons[16];
+int deviceButtonCount = 0;
+
+bool beginTouch() {
+  if (touchReady) return true;
+  if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_UNDEFINED) delay(1000);
+
+  Wire.begin(BOARD_SDA, BOARD_SCL);
+  pinMode(TOUCH_INT, OUTPUT);
+  digitalWrite(TOUCH_INT, HIGH);
+  delay(10);
+
+  uint8_t touchAddress = 0;
+  Wire.beginTransmission(0x14);
+  if (Wire.endTransmission() == 0) touchAddress = 0x14;
+  Wire.beginTransmission(0x5D);
+  if (Wire.endTransmission() == 0) touchAddress = 0x5D;
+  if (touchAddress == 0) {
+    dbgPrintln("Touch: GT911 not found on 0x14 or 0x5D (SDA " + String(BOARD_SDA)
+               + " SCL " + String(BOARD_SCL) + " INT " + String(TOUCH_INT) + ")");
+    return false;
+  }
+  dbgPrintln("Touch: GT911 address 0x" + String(touchAddress, HEX));
+
+  panelTouch.setPins(-1, TOUCH_INT);
+  if (!panelTouch.begin(Wire, touchAddress, BOARD_SDA, BOARD_SCL)) {
+    dbgPrintln("Touch: GT911 begin failed");
+    return false;
+  }
+  panelTouch.setMaxCoordinates(EPD_WIDTH, EPD_HEIGHT);
+  panelTouch.setSwapXY(true);
+  panelTouch.setMirrorXY(false, true);
+  panelTouch.setInterruptMode(FALLING);
+  touchReady = true;
+  dbgPrintln("Touch: GT911 ready, INT level " + String(digitalRead(TOUCH_INT)));
+  return true;
+}
+
+bool pollTouch(int16_t& x, int16_t& y) {
+  if (!touchReady) return false;
+  if (millis() < nextTouchPoll) return false;
+  nextTouchPoll = millis() + 300;
+  return panelTouch.getPoint(&x, &y) > 0;
+}
+
+void waitTouchRelease() {
+  uint32_t start = millis();
+  while (millis() - start < 1500) {
+    if (millis() < nextTouchPoll) {
+      delay(20);
+      continue;
+    }
+    nextTouchPoll = millis() + 300;
+    int16_t x, y;
+    if (!touchReady || panelTouch.getPoint(&x, &y) == 0) return;
+  }
+}
+
+UiButton menuButtons[8];
+int menuButtonCount = 0;
+
+void addMenuButton(int x, int y, int w, int h, int id, const char* label) {
+  if (menuButtonCount < 8) {
+    UiButton& button = menuButtons[menuButtonCount++];
+    button.x = x;
+    button.y = y;
+    button.w = w;
+    button.h = h;
+    button.id = id;
+  }
+  bool selected = (id == display_layout);
+  drawRect(x, y, w, h, Black);
+  if (selected) drawRect(x + 4, y + 4, w - 8, h - 8, Black);
+  setFont(OpenSans18B);
+  drawString(x + w / 2, y + 18, label, CENTER);
+}
+
+void drawOverlayMenu() {
+  menuButtonCount = 0;
+  const int panelX = 48;
+  const int panelY = 145;
+  const int panelW = SCREEN_WIDTH - 96;
+  const int panelH = 250;
+  fillRect(panelX, panelY, panelW, panelH, White);
+  drawRect(panelX, panelY, panelW, panelH, Black);
+  drawRect(panelX + 4, panelY + 4, panelW - 8, panelH - 8, Black);
+  setFont(OpenSans18B);
+  drawString(SCREEN_WIDTH / 2, panelY + 18, "Select screen", CENTER);
+
+  const int bw = 250;
+  const int bh = 70;
+  const int gap = 24;
+  const int row1 = 3;
+  int rowW = row1 * bw + (row1 - 1) * gap;
+  int x0 = (SCREEN_WIDTH - rowW) / 2;
+  int y0 = panelY + 70;
+  for (int i = 0; i < row1; i++) {
+    addMenuButton(x0 + i * (bw + gap), y0, bw, bh, i, layoutName(i));
+  }
+  int row2 = LAYOUT_COUNT - row1;
+  rowW = row2 * bw + (row2 - 1) * gap;
+  x0 = (SCREEN_WIDTH - rowW) / 2;
+  y0 += bh + 20;
+  for (int i = 0; i < row2; i++) {
+    addMenuButton(x0 + i * (bw + gap), y0, bw, bh, row1 + i, layoutName(row1 + i));
+  }
+}
+
+int menuButtonAt(int x, int y) {
+  for (int i = 0; i < menuButtonCount; i++) {
+    UiButton& button = menuButtons[i];
+    if (x >= button.x && x < button.x + button.w && y >= button.y && y < button.y + button.h) return button.id;
+  }
+  return -1;
+}
+
+void paintScreen() {
+  dbgPrintln("Paint layout " + layoutCaption());
+  epd_poweron();
+  epd_clear();
+  memset(framebuffer, 0xFF, EPD_WIDTH * EPD_HEIGHT / 2);
+  DisplayWeather();
+  edp_update();
+  epd_poweroff_all();
+}
+
+String keyStatus(const String& key) {
+  if (!key.length()) return "empty";
+  if (key.length() <= 4) return "set";
+  return "set  ..." + key.substring(key.length() - 4);
+}
+
+String clipText(const String& text, int limit) {
+  if ((int)text.length() <= limit) return text;
+  return text.substring(0, limit - 1) + ".";
+}
+
+void settingChip(int x, int y, int w, int h, int id, bool selected, const char* label, bool draw) {
+  if (deviceButtonCount < 16) {
+    UiButton& button = deviceButtons[deviceButtonCount++];
+    button.x = x;
+    button.y = y;
+    button.w = w;
+    button.h = h;
+    button.id = id;
+  }
+  if (!draw) return;
+  drawRect(x, y, w, h, Black);
+  if (selected) drawRect(x + 3, y + 3, w - 6, h - 6, Black);
+  setFont(OpenSans12B);
+  drawString(x + w / 2, y + 8, label, CENTER);
+}
+
+void layoutDeviceControls(bool draw) {
+  deviceButtonCount = 0;
+  const int x = 500;
+  const int chipY = 6;
+  int y = 78;
+  if (draw) {
+    setFont(OpenSans12B);
+    drawString(x, y, "Units", LEFT);
+  }
+  settingChip(x + 150, y - chipY, 110, 36, BTN_UNITS_M, settings.Units == "M", "Metric", draw);
+  settingChip(x + 270, y - chipY, 130, 36, BTN_UNITS_I, settings.Units != "M", "Imperial", draw);
+
+  y += 58;
+  if (draw) {
+    setFont(OpenSans12B);
+    drawString(x, y, "Sleep min", LEFT);
+    drawString(x + 230, y, String(settings.SleepDuration), CENTER);
+  }
+  settingChip(x + 150, y - chipY, 52, 36, BTN_SLEEP_DEC, false, "-", draw);
+  settingChip(x + 270, y - chipY, 52, 36, BTN_SLEEP_INC, false, "+", draw);
+
+  y += 58;
+  if (draw) {
+    setFont(OpenSans12B);
+    drawString(x, y, "Wake hour", LEFT);
+    drawString(x + 230, y, String(settings.WakeupHour), CENTER);
+  }
+  settingChip(x + 150, y - chipY, 52, 36, BTN_WAKE_DEC, false, "-", draw);
+  settingChip(x + 270, y - chipY, 52, 36, BTN_WAKE_INC, false, "+", draw);
+
+  y += 58;
+  if (draw) {
+    setFont(OpenSans12B);
+    drawString(x, y, "Sleep hour", LEFT);
+    drawString(x + 230, y, String(settings.SleepHour), CENTER);
+  }
+  settingChip(x + 150, y - chipY, 52, 36, BTN_SLEEPHOUR_DEC, false, "-", draw);
+  settingChip(x + 270, y - chipY, 52, 36, BTN_SLEEPHOUR_INC, false, "+", draw);
+
+  y += 58;
+  if (draw) {
+    setFont(OpenSans12B);
+    drawString(x, y, "Debug log", LEFT);
+  }
+  settingChip(x + 150, y - chipY, 80, 36, BTN_DBG_OFF, !settings.DbgLogEnable, "Off", draw);
+  settingChip(x + 240, y - chipY, 80, 36, BTN_DBG_ON, settings.DbgLogEnable, "On", draw);
+
+  y += 64;
+  settingChip(x + 150, y - chipY, 110, 40, BTN_SAVE, false, "Save", draw);
+  settingChip(x + 270, y - chipY, 150, 40, BTN_WEB, false, "Web setup", draw);
+
+  if (draw && deviceNotice.length()) {
+    setFont(OpenSans10B);
+    drawString(x, y + 46, deviceNotice, LEFT);
+  }
+}
+
+String formatSdBytes(uint64_t bytes) {
+  const double gb = 1024.0 * 1024.0 * 1024.0;
+  const double mb = 1024.0 * 1024.0;
+  if (bytes >= (uint64_t)gb) return String((double)bytes / gb, 2) + " GB";
+  if (bytes >= (uint64_t)mb) return String((double)bytes / mb, 1) + " MB";
+  return String((double)bytes / 1024.0, 0) + " KB";
+}
+
+void DisplayDeviceScreen() {
+  DrawBattery(0, 0, true);
+  setFont(OpenSans18B);
+  drawString(20, 8, "Device", LEFT);
+  setFont(OpenSans10B);
+  drawString(150, 16, "Touch the screen to open the menu", LEFT);
+
+  setFont(OpenSans12B);
+  int y = 56;
+  drawString(20, y, "Version   " + version, LEFT); y += 28;
+  if (!sdReady) {
+    drawString(20, y, "SD card   not found", LEFT); y += 28;
+  } else {
+    uint64_t card = SD.cardSize();
+    uint64_t total = SD.totalBytes();
+    uint64_t used = SD.usedBytes();
+    uint64_t freeBytes = total > used ? total - used : 0;
+    int usedPct = total ? (int)((used * 100ULL) / total) : 0;
+    drawString(20, y, "SD card   " + formatSdBytes(card), LEFT); y += 28;
+    drawString(20, y, "SD space  " + String(usedPct) + "% used    " + formatSdBytes(freeBytes) + " free", LEFT); y += 28;
+  }
+  drawString(20, y, "Boots     " + String(boot_count), LEFT); y += 28;
+  drawString(20, y, "Battery   " + String(logInfo.BatteryVoltage, 2) + " V    " + String(logInfo.BatteryPct) + "%", LEFT); y += 28;
+  String wifiLine = settings.WiFiSSID.length() ? clipText(settings.WiFiSSID, 18) : "(none)";
+  if (wifi_signal != 0) wifiLine += "   " + String(wifi_signal) + " dBm";
+  drawString(20, y, "WiFi      " + wifiLine, LEFT); y += 28;
+  drawString(20, y, "City      " + clipText(settings.City, 22), LEFT); y += 28;
+  drawString(20, y, "Lat " + clipText(settings.Latitude, 10) + "   Lon " + clipText(settings.Longitude, 10), LEFT); y += 36;
+  drawString(20, y, "OWM key        " + keyStatus(settings.OwmApikey), LEFT); y += 26;
+  drawString(20, y, "PositionStack  " + keyStatus(settings.PositionStackKey), LEFT); y += 26;
+  drawString(20, y, "TimeZoneDB     " + keyStatus(settings.TimezBBKey), LEFT); y += 26;
+  String influx = logSettings.INFLUXDB_URL.length() ? clipText(logSettings.INFLUXDB_BUCKET, 18) : "off";
+  drawString(20, y, "Influx         " + influx, LEFT); y += 36;
+  setFont(OpenSans10B);
+  drawString(20, y, "City, WiFi and API keys", LEFT); y += 18;
+  drawString(20, y, "are changed in Web setup.", LEFT);
+
+  layoutDeviceControls(true);
+}
+
+int deviceButtonAt(int x, int y) {
+  for (int i = 0; i < deviceButtonCount; i++) {
+    UiButton& button = deviceButtons[i];
+    if (x >= button.x && x < button.x + button.w && y >= button.y && y < button.y + button.h) return button.id;
+  }
+  return 0;
+}
+
+bool changeDeviceSetting(int id) {
+  switch (id) {
+    case BTN_UNITS_M:
+      if (settings.Units != "M") { settings.Units = "M"; weatherReady = false; deviceNotice = "Save to keep units"; }
+      return true;
+    case BTN_UNITS_I:
+      if (settings.Units != "I") { settings.Units = "I"; weatherReady = false; deviceNotice = "Save to keep units"; }
+      return true;
+    case BTN_SLEEP_DEC:
+      if (settings.SleepDuration > 5) settings.SleepDuration -= 5;
+      if (settings.SleepDuration < 5) settings.SleepDuration = 5;
+      deviceNotice = "Save to keep sleep time";
+      return true;
+    case BTN_SLEEP_INC:
+      if (settings.SleepDuration < 60) settings.SleepDuration += 5;
+      if (settings.SleepDuration > 60) settings.SleepDuration = 60;
+      deviceNotice = "Save to keep sleep time";
+      return true;
+    case BTN_WAKE_DEC:
+      settings.WakeupHour = (settings.WakeupHour + 23) % 24;
+      deviceNotice = "Save to keep hours";
+      return true;
+    case BTN_WAKE_INC:
+      settings.WakeupHour = (settings.WakeupHour + 1) % 24;
+      deviceNotice = "Save to keep hours";
+      return true;
+    case BTN_SLEEPHOUR_DEC:
+      settings.SleepHour = (settings.SleepHour + 23) % 24;
+      deviceNotice = "Save to keep hours";
+      return true;
+    case BTN_SLEEPHOUR_INC:
+      settings.SleepHour = (settings.SleepHour + 1) % 24;
+      deviceNotice = "Save to keep hours";
+      return true;
+    case BTN_DBG_OFF:
+      settings.DbgLogEnable = false;
+      deviceNotice = "Save to keep debug log";
+      return true;
+    case BTN_DBG_ON:
+      settings.DbgLogEnable = true;
+      deviceNotice = "Save to keep debug log";
+      return true;
+    case BTN_SAVE:
+      save_config_to_memory();
+      deviceNotice = "Saved";
+      return true;
+    case BTN_WEB:
+      run_config_server();
+      return false;
+    default:
+      return false;
+  }
+}
+
+void showLayout(uint8_t id) {
+  menuVisible = false;
+  setDisplayLayout(id);
+  if (id == LAYOUT_DEVICE || weatherReady) {
+    paintScreen();
+    return;
+  }
+  if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
+    request_render_weather(false);
+    failed_count(true);
+    if (!weatherReady) display_failed_mode_and_sleep();
+  } else {
+    display_failed_mode_and_sleep();
+  }
+}
+
+void handleScreenTouch(int x, int y) {
+  dbgPrintln("Touch x=" + String(x) + " y=" + String(y) + (menuVisible ? " menu-open" : ""));
+  if (menuVisible) {
+    int id = menuButtonAt(x, y);
+    menuVisible = false;
+    if (id >= 0) {
+      dbgPrintln("Menu select " + String(layoutName(id)));
+      if ((uint8_t)id != display_layout) showLayout((uint8_t)id);
+      else paintScreen();
+    } else {
+      dbgPrintln("Menu dismissed");
+      paintScreen();
+    }
+    return;
+  }
+  if (display_layout == LAYOUT_DEVICE) {
+    int button = deviceButtonAt(x, y);
+    if (button) {
+      dbgPrintln("Device button " + String(button));
+      if (changeDeviceSetting(button)) paintScreen();
+      return;
+    }
+  }
+  menuVisible = true;
+  dbgPrintln("Open layout menu");
+  paintScreen();
+}
+
+void handleWakeTouch() {
+  menuVisible = true;
+  dbgPrintln("Wake touch: open layout menu");
+}
+
+void serviceTouchThenSleep() {
+  uint32_t idleUntil = millis() + TOUCH_SESSION_MS;
+  uint32_t nextHeartbeat = millis();
+  dbgPrintln("Touch session " + String(TOUCH_SESSION_MS / 1000) + "s, layout " + layoutCaption());
+  if (beginTouch()) {
+    while ((int32_t)(idleUntil - millis()) > 0) {
+      if ((int32_t)(millis() - nextHeartbeat) >= 0) {
+        dbgPrintln("Touch listening, " + String((idleUntil - millis()) / 1000) + "s left");
+        nextHeartbeat = millis() + 5000;
+      }
+      int16_t x, y;
+      if (!pollTouch(x, y)) {
+        delay(20);
+        continue;
+      }
+      handleScreenTouch(x, y);
+      waitTouchRelease();
+      idleUntil = millis() + TOUCH_SESSION_MS;
+    }
+  } else {
+    dbgPrintln("Touch session skipped, controller not found");
+  }
+  pinMode(TOUCH_INT, INPUT);
+  BeginSleep(true);
+}
+
+void DisplayWeather() {
+  switch (display_layout) {
+    case LAYOUT_MAIN:    DisplayWeatherMain();    break;
+    case LAYOUT_GRAPHS:  DisplayWeatherGraphs();  break;
+    case LAYOUT_DETAILS: DisplayWeatherDetails(); break;
+    case LAYOUT_DEVICE:  DisplayDeviceScreen();   break;
+    default:             DisplayWeatherFull();    break;
+  }
+  if (menuVisible) drawOverlayMenu();
+}
+
+void DisplayWeatherFull() {                      // 4.7" e-paper display is 960x540 resolution
   DisplayStatusSection(525, 27, wifi_signal);    // Wi-Fi signal strength and Battery voltage
   DisplayGeneralInfoSection();                   // Top line of the display
   DisplayDisplayWindSection(137, 155, WxConditions[0].Winddir, WxConditions[0].Windspeed, 100);
   DisplayAstronomySection(5, 252);               // Astronomy section Sun rise/set, Moon phase and Moon icon
   DisplayMainWeatherSection(320, 110);           // Centre section of display for Location, temperature, Weather report, current Wx Symbol
   DisplayWeatherIcon(830, 120);                  // Display weather icon scale = Large;
-  DisplayForecastSection(285, 220);              // 3hr forecast boxes
+  DisplayForecastSection(285, 220, 82);          // 3hr forecast boxes
   DisplayGraphSection(320, 220);                 // Graphs of pressure, temperature, humidity and rain or snowfall
+  setFont(OpenSans8B);
+  drawString(610, 6, layoutCaption(), LEFT);
 }
 
 void DisplayGeneralInfoSection() {
@@ -875,15 +1606,15 @@ String MoonPhase(int d, int m, int y, String hemisphere) {
   return "";
 }
 
-void DisplayForecastSection(int x, int y) {
+void DisplayForecastSection(int x, int y, int fwidth) {
   int f = 0;
   do {
-    DisplayForecastWeather(x, y, f, 82); // x,y cordinates, forecatsr number, spacing width
+    DisplayForecastWeather(x, y, f, fwidth);
     f++;
   } while (f < 8);
 }
 
-void DisplayGraphSection(int x, int y) {
+void loadGraphReadings() {
   int r = 0;
   do { // Pre-load temporary arrays with with data - because C parses by reference and remember that[1] has already been converted to I units
     if (settings.Units == "I") pressure_readings[r] = WxForecast[r].Pressure * 0.02953;   else pressure_readings[r] = WxForecast[r].Pressure;
@@ -893,18 +1624,35 @@ void DisplayGraphSection(int x, int y) {
     humidity_readings[r]                   = WxForecast[r].Humidity;
     r++;
   } while (r < max_readings);
+}
+
+void drawPrecipGraph(int x, int y, int gwidth, int gheight) {
+  if (SumOfPrecip(rain_readings, max_readings) >= SumOfPrecip(snow_readings, max_readings))
+    DrawGraph(x, y, gwidth, gheight, 0, 30, settings.Units == "M" ? TXT_RAINFALL_MM : TXT_RAINFALL_IN, rain_readings, max_readings, autoscale_on, barchart_on);
+  else
+    DrawGraph(x, y, gwidth, gheight, 0, 30, settings.Units == "M" ? TXT_SNOWFALL_MM : TXT_SNOWFALL_IN, snow_readings, max_readings, autoscale_on, barchart_on);
+}
+
+void drawAllGraphs(int x0, int y0, int x1, int y1, int gwidth, int gheight) {
+  loadGraphReadings();
+  DrawGraph(x0, y0, gwidth, gheight, 900, 1050, settings.Units == "M" ? TXT_PRESSURE_HPA : TXT_PRESSURE_IN, pressure_readings, max_readings, autoscale_on, barchart_off);
+  DrawGraph(x1, y0, gwidth, gheight, 10, 30,    settings.Units == "M" ? TXT_TEMPERATURE_C : TXT_TEMPERATURE_F, temperature_readings, max_readings, autoscale_on, barchart_off);
+  DrawGraph(x0, y1, gwidth, gheight, 0, 100,    TXT_HUMIDITY_PERCENT, humidity_readings, max_readings, autoscale_off, barchart_off);
+  drawPrecipGraph(x1, y1, gwidth, gheight);
+}
+
+void DisplayGraphSection(int x, int y) {
+  (void)x;
+  (void)y;
   int gwidth = 175, gheight = 100;
   int gx = (SCREEN_WIDTH - gwidth * 4) / 5 + 8;
   int gy = (SCREEN_HEIGHT - gheight - 30);
   int gap = gwidth + gx;
-  // (x,y,width,height,MinValue, MaxValue, Title, Data Array, AutoScale, ChartMode)
+  loadGraphReadings();
   DrawGraph(gx + 0 * gap, gy, gwidth, gheight, 900, 1050, settings.Units == "M" ? TXT_PRESSURE_HPA : TXT_PRESSURE_IN, pressure_readings, max_readings, autoscale_on, barchart_off);
   DrawGraph(gx + 1 * gap, gy, gwidth, gheight, 10, 30,    settings.Units == "M" ? TXT_TEMPERATURE_C : TXT_TEMPERATURE_F, temperature_readings, max_readings, autoscale_on, barchart_off);
   DrawGraph(gx + 2 * gap, gy, gwidth, gheight, 0, 100,   TXT_HUMIDITY_PERCENT, humidity_readings, max_readings, autoscale_off, barchart_off);
-  if (SumOfPrecip(rain_readings, max_readings) >= SumOfPrecip(snow_readings, max_readings))
-    DrawGraph(gx + 3 * gap + 5, gy, gwidth, gheight, 0, 30, settings.Units == "M" ? TXT_RAINFALL_MM : TXT_RAINFALL_IN, rain_readings, max_readings, autoscale_on, barchart_on);
-  else
-    DrawGraph(gx + 3 * gap + 5, gy, gwidth, gheight, 0, 30, settings.Units == "M" ? TXT_SNOWFALL_MM : TXT_SNOWFALL_IN, snow_readings, max_readings, autoscale_on, barchart_on);
+  drawPrecipGraph(gx + 3 * gap + 5, gy, gwidth, gheight);
 }
 
 void DisplayConditionsSection(int x, int y, String IconName, bool IconSize) {
@@ -942,8 +1690,7 @@ void DrawSegment(int x, int y, int o1, int o2, int o3, int o4, int o11, int o12,
   drawLine(x + o11, y + o12, x + o13, y + o14, Black);
 }
 
-void DrawPressureAndTrend(int x, int y, float pressure, String slope) {
-  drawString(x + 25, y - 10, String(pressure, (settings.Units == "M" ? 0 : 1)) + (settings.Units == "M" ? "hPa" : "in"), LEFT);
+void DrawPressureTrendArrow(int x, int y, String slope) {
   if      (slope == "+") {
     DrawSegment(x, y, 0, 0, 8, -8, 8, -8, 16, 0);
     DrawSegment(x - 1, y, 0, 0, 8, -8, 8, -8, 16, 0);
@@ -956,6 +1703,222 @@ void DrawPressureAndTrend(int x, int y, float pressure, String slope) {
     DrawSegment(x, y, 0, 0, 8, 8, 8, 8, 16, 0);
     DrawSegment(x - 1, y, 0, 0, 8, 8, 8, 8, 16, 0);
   }
+}
+
+void DrawPressureAndTrend(int x, int y, float pressure, String slope) {
+  drawString(x + 25, y - 10, String(pressure, (settings.Units == "M" ? 0 : 1)) + (settings.Units == "M" ? "hPa" : "in"), LEFT);
+  DrawPressureTrendArrow(x, y, slope);
+}
+
+void DisplayPageHeader(const String& caption) {
+  setFont(OpenSans18B);
+  drawString(16, 8, settings.City, LEFT);
+  setFont(OpenSans12B);
+  drawString(300, 12, Date_str + "  " + Time_str, LEFT);
+  setFont(OpenSans10B);
+  drawString(16, 42, caption, LEFT);
+  DisplayStatusSection(525, 28, wifi_signal);
+  drawLine(16, 68, SCREEN_WIDTH - 16, 68, Grey);
+}
+
+String iconPhrase(const String& icon) {
+  String code = icon.substring(0, 2);
+  if (code == "01") return "Clear";
+  if (code == "02") return "Partly Cloudy";
+  if (code == "03") return "Mostly Cloudy";
+  if (code == "04") return "Cloudy";
+  if (code == "09") return "Showers";
+  if (code == "10") return "Rain";
+  if (code == "11") return "Storm";
+  if (code == "13") return "Snow";
+  if (code == "50") return "Mist";
+  return "";
+}
+
+struct tm shiftedLocal(time_t utc) {
+  time_t shifted = utc + (time_t)WxConditions[0].FTimezone;
+  return *localtime(&shifted);
+}
+
+int collectDaySlots(DaySlot* days, int maxDays) {
+  int count = 0;
+  for (int r = 0; r < max_readings; r++) {
+    if (WxForecast[r].Dt <= 0) continue;
+    struct tm tm = shiftedLocal(WxForecast[r].Dt);
+    int key = (tm.tm_year << 9) | tm.tm_yday;
+    int idx = -1;
+    for (int i = 0; i < count; i++) if (days[i].key == key) idx = i;
+    if (idx < 0) {
+      if (count >= maxDays) continue;
+      idx = count++;
+      days[idx].key = key;
+      days[idx].labelDt = WxForecast[r].Dt;
+      days[idx].high = WxForecast[r].High;
+      days[idx].low = WxForecast[r].Low;
+      days[idx].icon[0] = 0;
+      days[idx].iconScore = -1;
+    }
+    if (WxForecast[r].High > days[idx].high) days[idx].high = WxForecast[r].High;
+    if (WxForecast[r].Low < days[idx].low) days[idx].low = WxForecast[r].Low;
+    int score = 1;
+    if (tm.tm_hour >= 8 && tm.tm_hour <= 18) score = 2;
+    if (tm.tm_hour >= 11 && tm.tm_hour <= 16) score = 3;
+    if (WxForecast[r].Icon.endsWith("d")) score++;
+    if (score > days[idx].iconScore) {
+      days[idx].iconScore = score;
+      strncpy(days[idx].icon, WxForecast[r].Icon.c_str(), sizeof(days[idx].icon) - 1);
+      days[idx].icon[sizeof(days[idx].icon) - 1] = 0;
+    }
+  }
+  return count;
+}
+
+String daySlotLabel(const DaySlot& day, int todayKey) {
+  if (day.key == todayKey) return "Today";
+  struct tm tm = shiftedLocal(day.labelDt);
+  char buf[24];
+  snprintf(buf, sizeof(buf), "%s, %s %d", weekday_D[tm.tm_wday], month_M[tm.tm_mon], tm.tm_mday);
+  return String(buf);
+}
+
+void drawStatIcon(int kind, int x, int y) {
+  switch (kind) {
+    case 0:
+      drawLine(x + 8, y + 1, x + 8, y + 12, Black);
+      drawCircle(x + 8, y + 15, 3, Black);
+      break;
+    case 1:
+      fillCircle(x + 8, y + 12, 5, Black);
+      fillCircle(x + 8, y + 8, 3, White);
+      break;
+    case 2:
+      drawLine(x + 1, y + 4, x + 16, y + 4, Black);
+      drawLine(x + 1, y + 9, x + 11, y + 9, Black);
+      drawLine(x + 1, y + 14, x + 16, y + 14, Black);
+      break;
+    case 3:
+      drawCircle(x + 8, y + 9, 7, Black);
+      drawLine(x + 8, y + 9, x + 8, y + 5, Black);
+      drawLine(x + 8, y + 9, x + 12, y + 11, Black);
+      break;
+    default:
+      drawCircle(x + 8, y + 9, 3, Black);
+      drawLine(x + 8, y + 1, x + 8, y + 4, Black);
+      drawLine(x + 8, y + 14, x + 8, y + 17, Black);
+      drawLine(x + 1, y + 9, x + 4, y + 9, Black);
+      drawLine(x + 12, y + 9, x + 15, y + 9, Black);
+      break;
+  }
+}
+
+void drawMainStatRow(int panelX, int rowY, int rowW, int rowH, int kind, const String& label, const String& value, const String& value2) {
+  drawStatIcon(kind, panelX + 16, rowY + (rowH - 18) / 2);
+  setFont(OpenSans12B);
+  int textY = value2.length() ? rowY + 6 : rowY + 16;
+  drawString(panelX + 48, rowY + 16, label, LEFT);
+  drawString(panelX + rowW - 8, textY, value, RIGHT);
+  if (value2.length()) drawString(panelX + rowW - 8, textY + 20, value2, RIGHT);
+}
+
+void DisplayWeatherMain() {
+  const String degree = settings.Units == "M" ? "°C" : "°F";
+
+  fillCircle(22, 24, 7, Black);
+  fillCircle(22, 22, 3, White);
+  setFont(OpenSans18B);
+  drawString(40, 10, settings.City, LEFT);
+
+  String clockText = Time_str;
+  if (settings.Units == "M" && clockText.length() >= 5) clockText = clockText.substring(0, 5);
+  setFont(OpenSans12B);
+  drawString(SCREEN_WIDTH - 16, 16, Date_str + "  |  " + clockText, RIGHT);
+
+  const int ruleX = 490;
+  const int panelX = 506;
+  const int panelY = 68;
+  const int panelW = SCREEN_WIDTH - 16 - panelX;
+  const int panelH = 250;
+  const int rowH = panelH / 5;
+  drawLine(ruleX, panelY, ruleX, panelY + panelH, Black);
+  for (int row = 1; row < 5; row++) {
+    drawLine(panelX, panelY + row * rowH, panelX + panelW, panelY + row * rowH, Grey);
+  }
+
+  DisplayConditionsSection(145, 180, WxConditions[0].Icon, LargeIcon);
+  setFont(OpenSans24B);
+  drawString(270, 108, String(WxConditions[0].Temperature, 0) + degree, LEFT);
+  setFont(OpenSans18B);
+  drawString(270, 172, iconPhrase(WxConditions[0].Icon), LEFT);
+  setFont(OpenSans12B);
+  drawString(270, 214, "Feels like " + String(WxConditions[0].FeelsLike, 0) + degree, LEFT);
+
+  String pressureText = String(WxConditions[0].Pressure, settings.Units == "M" ? 0 : 1)
+                        + (settings.Units == "M" ? " hPa" : " in");
+  String sunText = ConvertUnixTime(WxConditions[0].Sunrise).substring(0, 5) + " / "
+                   + ConvertUnixTime(WxConditions[0].Sunset).substring(0, 5);
+  drawMainStatRow(panelX, panelY + 0 * rowH, panelW, rowH, 0, "High / Low",
+                  String(WxConditions[0].High, 0) + "° / " + String(WxConditions[0].Low, 0) + "°", "");
+  drawMainStatRow(panelX, panelY + 1 * rowH, panelW, rowH, 1, "Humidity",
+                  String(WxConditions[0].Humidity, 0) + "%", "");
+  drawMainStatRow(panelX, panelY + 2 * rowH, panelW, rowH, 2, "Wind",
+                  String(WxConditions[0].Windspeed, 1) + (settings.Units == "M" ? " m/s" : " mph"),
+                  WindDegToOrdinalDirection(WxConditions[0].Winddir));
+  drawMainStatRow(panelX, panelY + 3 * rowH, panelW, rowH, 3, "Pressure", pressureText, "");
+  drawMainStatRow(panelX, panelY + 4 * rowH, panelW, rowH, 4, "Sunrise / Sunset", sunText, "");
+
+  DaySlot days[5];
+  int dayCount = collectDaySlots(days, 5);
+  if (dayCount < 1) return;
+  struct tm nowTm = shiftedLocal(time(NULL));
+  int todayKey = (nowTm.tm_year << 9) | nowTm.tm_yday;
+
+  const int stripX = 16;
+  const int stripY = 336;
+  const int stripW = SCREEN_WIDTH - 32;
+  const int stripH = 188;
+  const int colW = stripW / dayCount;
+  drawRect(stripX, stripY, stripW, stripH, Black);
+  for (int i = 0; i < dayCount; i++) {
+    int colX = stripX + i * colW;
+    int colRight = (i == dayCount - 1) ? stripX + stripW : colX + colW;
+    if (i > 0) drawLine(colX, stripY + 10, colX, stripY + stripH - 10, Grey);
+    if (days[i].key == todayKey) {
+      drawRect(colX + 6, stripY + 6, (colRight - colX) - 12, stripH - 12, Black);
+      drawRect(colX + 7, stripY + 7, (colRight - colX) - 14, stripH - 14, Black);
+    }
+    int mid = (colX + colRight) / 2;
+    setFont(OpenSans12B);
+    drawString(mid, stripY + 16, daySlotLabel(days[i], todayKey), CENTER);
+    DisplayConditionsSection(mid, stripY + 82, days[i].icon, SmallIcon);
+    setFont(OpenSans18B);
+    drawString(mid, stripY + 124, String(days[i].high, 0) + "° / " + String(days[i].low, 0) + "°", CENTER);
+    setFont(OpenSans10B);
+    drawString(mid, stripY + 158, iconPhrase(days[i].icon), CENTER);
+  }
+}
+
+void DisplayWeatherGraphs() {
+  DisplayPageHeader(layoutCaption());
+  setFont(OpenSans12B);
+  drawString(250, 42, String(WxConditions[0].Temperature, 1) + "°    "
+             + String(WxConditions[0].Humidity, 0) + "%", LEFT);
+
+  const int gwidth = 380;
+  const int gheight = 150;
+  drawAllGraphs(56, 118, 506, 348, gwidth, gheight);
+}
+
+void DisplayWeatherDetails() {
+  DisplayPageHeader(layoutCaption());
+  setFont(OpenSans12B);
+  drawString(250, 42, String(WxConditions[0].Temperature, 1) + "°    "
+             + String(WxConditions[0].Humidity, 0) + "%", LEFT);
+
+  DisplayDisplayWindSection(170, 200, WxConditions[0].Winddir, WxConditions[0].Windspeed, 95);
+  DisplayAstronomySection(430, 78);
+  DisplayVisiCCoverUVISection(420, 230);
+  DisplayAirQualitySection(420, 285);
+  DisplayForecastSection(16, 368, 116);
 }
 
 void DisplayStatusSection(int x, int y, int rssi) {
@@ -1010,6 +1973,7 @@ boolean UpdateLocalTime() {
   }
   Date_str = day_output;
   Time_str = time_output;
+  sdOnClockReady();
   return true;
 }
 
