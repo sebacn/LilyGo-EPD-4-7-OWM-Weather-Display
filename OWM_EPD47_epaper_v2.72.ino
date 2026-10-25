@@ -494,16 +494,7 @@ bool appendJsonArray(const String& path, const String& object) {
   return true;
 }
 
-void logWeatherToSd() {
-  if (!sdReady) return;
-  sdOnClockReady();
-  String day = sdDayStamp();
-  if (!day.length()) {
-    dbgPrintln("SD weather log skipped, clock is not set");
-    return;
-  }
-
-  JsonDocument doc;
+void fillWeatherDocument(JsonDocument& doc) {
   doc["time"] = sdIsoStamp();
   doc["city"] = settings.City;
   doc["lat"] = settings.Latitude;
@@ -514,8 +505,10 @@ void logWeatherToSd() {
   current["dt"] = WxConditions[0].Dt;
   current["temp"] = WxConditions[0].Temperature;
   current["feels_like"] = WxConditions[0].FeelsLike;
+  current["dew_point"] = WxConditions[0].DewPoint;
   current["humidity"] = WxConditions[0].Humidity;
   current["pressure"] = WxConditions[0].Pressure;
+  current["pressure_trend"] = WxConditions[0].Trend;
   current["wind_speed"] = WxConditions[0].Windspeed;
   current["wind_deg"] = WxConditions[0].Winddir;
   current["clouds"] = WxConditions[0].Cloudcover;
@@ -527,8 +520,10 @@ void logWeatherToSd() {
   current["sunset"] = WxConditions[0].Sunset;
   current["high"] = WxConditions[0].High;
   current["low"] = WxConditions[0].Low;
+  current["timezone_offset"] = WxConditions[0].FTimezone;
 
   JsonObject air = doc["air"].to<JsonObject>();
+  air["dt"] = WxAirQ.Dt;
   air["aqi"] = WxAirQ.AQI;
   air["co"] = WxAirQ.CO;
   air["no"] = WxAirQ.NO;
@@ -553,12 +548,38 @@ void logWeatherToSd() {
     slot["snow"] = WxForecast[i].Snowfall;
     slot["icon"] = WxForecast[i].Icon;
   }
+}
 
+void logWeatherToSd() {
+  if (!sdReady) return;
+  sdOnClockReady();
+  String day = sdDayStamp();
+  if (!day.length()) {
+    dbgPrintln("SD weather log skipped, clock is not set");
+    return;
+  }
+
+  JsonDocument doc;
+  fillWeatherDocument(doc);
   String body;
   serializeJson(doc, body);
   String path = "/weather/" + day + ".json";
   if (appendJsonArray(path, body)) dbgPrintln("SD weather saved " + path + " (" + String(body.length()) + " bytes)");
   else dbgPrintln("SD weather save failed " + path);
+}
+
+void publishWeatherMqtt() {
+  if (!settings.HaHost.length()) {
+    dbgPrintln("MQTT skipped, home_assistant_server_host is empty");
+    return;
+  }
+  String body;
+  {
+    JsonDocument doc;
+    fillWeatherDocument(doc);
+    serializeJson(doc, body);
+  }
+  mqttPublishWeather(body);
 }
 
 void InitialiseSystem() {
@@ -754,14 +775,15 @@ void request_render_weather(bool _clearDisplay)
   }
 
   collectAndWriteLog(OPERATING_MODE, true, RxWeather, RxAqidata);
-  StopWiFi();         // Reduces power consumption
 
   dbgPrintln("Received all weather data...");
   if (RxWeather && RxForecast && RxAqidata) { // Only if received both Weather or Forecast proceed
     weatherReady = true;
+    publishWeatherMqtt();
     logWeatherToSd();
-    paintScreen();
   }
+  StopWiFi();         // Reduces power consumption
+  if (weatherReady) paintScreen();
 }
 
 void Convert_Readings_to_Imperial() { // Only the first 3-hours are used
@@ -791,6 +813,7 @@ bool DecodeWeather(WiFiClient& json, String Type) {
     WxConditions[0].Low         = 50;  // Maximum Forecast High
     WxConditions[0].FTimezone   = doc["timezone_offset"]; // "0"
     JsonObject current = doc["current"];
+    WxConditions[0].Dt          = current["dt"];                                   dbgPrintln("CDt: " + String(WxConditions[0].Dt));
     WxConditions[0].Sunrise     = current["sunrise"];                              dbgPrintln("SRis: " + String(WxConditions[0].Sunrise));
     WxConditions[0].Sunset      = current["sunset"];                               dbgPrintln("SSet: " + String(WxConditions[0].Sunset));
     WxConditions[0].Temperature = current["temp"];                                 dbgPrintln("Temp: " + String(WxConditions[0].Temperature));

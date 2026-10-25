@@ -72,6 +72,13 @@ struct Settings {
     String Units = "M";        // Use 'M' for Metric or I for Imperial 
     bool DbgLogEnable = false;
 
+    // Home Assistant MQTT over Cloudflare Access (wss). Empty host leaves MQTT off.
+    String HaHost = "";
+    String CfAccessId = "";
+    String CfAccessSecret = "";
+    String MqttUser = "";
+    String MqttPass = "";
+
     void print() {
         //dbgPrintln("City (" + String(sizeof(City)) + "):");
         //dbgPrintln("Settings (" + String(sizeof(this)) + "):");
@@ -87,7 +94,14 @@ struct Settings {
             + ", SleepDuration: " + String(SleepDuration)
             + ", WakeupHour: " + String(WakeupHour)
             + ", SleepHour: " + String(SleepHour)
-            + ", DbgLogEnable: " + String(DbgLogEnable)); 
+            + ", DbgLogEnable: " + String(DbgLogEnable));
+
+        dbgPrintln("Settings: WiFiSSID: " + WiFiSSID
+            + ", home_assistant_server_host: " + HaHost
+            + ", CF-Access-Client-Id: " + String(CfAccessId.length() ? "set" : "empty")
+            + ", CF-Access-Client-Secret: " + String(CfAccessSecret.length() ? "set" : "empty")
+            + ", mqtt-user: " + String(MqttUser.length() ? "set" : "empty")
+            + ", mqtt-password: " + String(MqttPass.length() ? "set" : "empty"));
     }
     
 } ;
