@@ -439,6 +439,11 @@ void read_config_from_memory() {
     settings.SleepHour = preferences.getInt("SleepHour", 23); 
     settings.Units = preferences.getString("Units", "M");
     settings.DbgLogEnable = preferences.getBool("DbgLogEnable", false);
+    settings.HaHost = preferences.getString("HaHost", "");
+    settings.CfAccessId = preferences.getString("CfAccessId", "");
+    settings.CfAccessSecret = preferences.getString("CfAccessSec", "");
+    settings.MqttUser = preferences.getString("MqttUser", "");
+    settings.MqttPass = preferences.getString("MqttPass", "");
 
     logSettings.INFLUXDB_URL = preferences.getString("INFLUXDB_URL", "");
     logSettings.INFLUXDB_BUCKET = preferences.getString("INFLUXDB_BUCKET", "");
@@ -473,6 +478,11 @@ void save_config_to_memory() {
     preferences.putInt("SleepHour", settings.SleepHour); 
     preferences.putString("Units", settings.Units); 
     preferences.putBool("DbgLogEnable", settings.DbgLogEnable);
+    preferences.putString("HaHost", settings.HaHost);
+    preferences.putString("CfAccessId", settings.CfAccessId);
+    preferences.putString("CfAccessSec", settings.CfAccessSecret);
+    preferences.putString("MqttUser", settings.MqttUser);
+    preferences.putString("MqttPass", settings.MqttPass);
 
     preferences.putString("INFLUXDB_URL", logSettings.INFLUXDB_URL);
     preferences.putString("INFLUXDB_BUCKET", logSettings.INFLUXDB_BUCKET);
@@ -627,6 +637,8 @@ void run_config_server() {
 
     WiFi.mode(WIFI_STA); 
 
+    WiFiManagerParameter parmWifiName("parmWifiName", "wifi_name", settings.WiFiSSID.c_str(), 32);
+    WiFiManagerParameter parmWifiPass("parmWifiPass", "wifi_password", settings.WiFiPass.c_str(), 64, "type=\"password\" autocomplete=\"off\"");
     WiFiManagerParameter parmCity("parmCity", "City", settings.City.c_str(), 15);
     WiFiManagerParameter parmOwmApikey("parmOwmApikey", "Openweathermap api key", settings.OwmApikey.c_str(), 40);
     WiFiManagerParameter parmPositionStackKey("parmPositionStackKey", "PositionStack api key", settings.PositionStackKey.c_str(), 40);    
@@ -642,10 +654,18 @@ void run_config_server() {
     WiFiManagerParameter parmINFLUXDB_ORG("parmINFLUXDB_ORG", "Log INFLUXDB_ORG", logSettings.INFLUXDB_ORG.c_str(), 50);
     WiFiManagerParameter parmINFLUXDB_TOKEN("parmINFLUXDB_TOKEN", "LogINFLUXDB_TOKEN", logSettings.INFLUXDB_TOKEN.c_str(), 100);
     WiFiManagerParameter parmMTLS_CERT("parmMTLS_CERT", "Log MTLS certificate PEM", logSettings.MTLS_CERT.c_str(), MTLS_PEM_MAX, "placeholder=\"-----BEGIN CERTIFICATE----- ...\"");
-    WiFiManagerParameter parmMTLS_PKEY("parmMTLS_PKEY", "Log MTLS private key PEM", logSettings.MTLS_PKEY.c_str(), MTLS_PEM_MAX, "placeholder=\"-----BEGIN PRIVATE KEY----- ...\""); 
+    WiFiManagerParameter parmMTLS_PKEY("parmMTLS_PKEY", "Log MTLS private key PEM", logSettings.MTLS_PKEY.c_str(), MTLS_PEM_MAX, "placeholder=\"-----BEGIN PRIVATE KEY----- ...\"");
+    WiFiManagerParameter parmMqttNote("<p><b>Home Assistant MQTT over WebSocket TLS</b><br/>Cloudflare Access headers are sent on the WebSocket handshake. Host may be hostname or hostname/path. The path defaults to /mqtt.</p>");
+    WiFiManagerParameter parmHaHost("parmHaHost", "home_assistant_server_host", settings.HaHost.c_str(), 128, "placeholder=\"ha.example.com or ha.example.com/mqtt\"");
+    WiFiManagerParameter parmCfId("parmCfId", "CF-Access-Client-Id", settings.CfAccessId.c_str(), 128, "autocomplete=\"off\"");
+    WiFiManagerParameter parmCfSecret("parmCfSecret", "CF-Access-Client-Secret", settings.CfAccessSecret.c_str(), 256, "type=\"password\" autocomplete=\"off\"");
+    WiFiManagerParameter parmMqttUser("parmMqttUser", "mqtt-user", settings.MqttUser.c_str(), 64, "autocomplete=\"off\"");
+    WiFiManagerParameter parmMqttPass("parmMqttPass", "mqtt-password", settings.MqttPass.c_str(), 128, "type=\"password\" autocomplete=\"off\"");
 
     WiFiManager wm;
 
+    wm.addParameter(&parmWifiName);
+    wm.addParameter(&parmWifiPass);
     wm.addParameter(&parmCity);
     wm.addParameter(&parmOwmApikey);
     wm.addParameter(&parmPositionStackKey);
@@ -661,7 +681,13 @@ void run_config_server() {
     wm.addParameter(&parmINFLUXDB_ORG);
     wm.addParameter(&parmINFLUXDB_TOKEN);
     wm.addParameter(&parmMTLS_CERT);
-    wm.addParameter(&parmMTLS_PKEY);   
+    wm.addParameter(&parmMTLS_PKEY);
+    wm.addParameter(&parmMqttNote);
+    wm.addParameter(&parmHaHost);
+    wm.addParameter(&parmCfId);
+    wm.addParameter(&parmCfSecret);
+    wm.addParameter(&parmMqttUser);
+    wm.addParameter(&parmMqttPass);   
 
     //wm.setTimeout(120);
     wm.setConfigPortalTimeout(60*5); //5 min
@@ -717,8 +743,23 @@ void run_config_server() {
         {
             dbgPrintln("Config: WiFi manager save config..");
 
-            settings.WiFiPass = wm.getWiFiPass();
-            settings.WiFiSSID = wm.getWiFiSSID();
+            String formSsid = String(parmWifiName.getValue());
+            String formPass = String(parmWifiPass.getValue());
+            formSsid.trim();
+            String portalSsid = wm.getWiFiSSID();
+            String portalPass = wm.getWiFiPass();
+            String previousSsid = settings.WiFiSSID;
+            if (portalSsid.length() && portalSsid != previousSsid) {
+                settings.WiFiSSID = portalSsid;
+                settings.WiFiPass = portalPass;
+            } else if (formSsid.length()) {
+                settings.WiFiSSID = formSsid;
+                if (formPass.length()) settings.WiFiPass = formPass;
+                else if (portalSsid == formSsid && portalPass.length()) settings.WiFiPass = portalPass;
+            } else if (portalSsid.length()) {
+                settings.WiFiSSID = portalSsid;
+                settings.WiFiPass = portalPass;
+            }
             settings.City = String(parmCity.getValue());
             settings.OwmApikey = String(parmOwmApikey.getValue());
             settings.PositionStackKey = String(parmPositionStackKey.getValue());
@@ -733,7 +774,17 @@ void run_config_server() {
             logSettings.INFLUXDB_ORG = String(parmINFLUXDB_ORG.getValue());
             logSettings.INFLUXDB_TOKEN = String(parmINFLUXDB_TOKEN.getValue());
             logSettings.MTLS_CERT = flattenPem(String(parmMTLS_CERT.getValue()));
-            logSettings.MTLS_PKEY = flattenPem(String(parmMTLS_PKEY.getValue()));         
+            logSettings.MTLS_PKEY = flattenPem(String(parmMTLS_PKEY.getValue()));
+            settings.HaHost = String(parmHaHost.getValue());
+            settings.HaHost.trim();
+            settings.CfAccessId = String(parmCfId.getValue());
+            settings.CfAccessId.trim();
+            settings.CfAccessSecret = String(parmCfSecret.getValue());
+            settings.CfAccessSecret.trim();
+            settings.MqttUser = String(parmMqttUser.getValue());
+            settings.MqttUser.trim();
+            settings.MqttPass = String(parmMqttPass.getValue());
+            settings.MqttPass.trim();
             
             settings.ConfigOk = false; //validate after save
             save_config_to_memory();  
@@ -952,5 +1003,6 @@ int failed_count(bool _reset) {
     return ret;
 }
 
+#include "mqtt_ha.h"
 
 #endif
