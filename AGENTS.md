@@ -2,7 +2,7 @@
 
 OpenWeatherMap weather station for a modified LilyGo T5 4.7" ESP32-S3 e-paper board. Read this before changing firmware.
 
-The sketch is `OWM_EPD47_epaper_v2.72.ino`. `platformio.ini` sets `src_dir = .`, so that file is the program. Shared settings, the Wi-Fi portal, and validation live in `config.h`. Weather structs are in `forecast_record.h`. Pins are in `utilities.h` (the sketch includes this copy, not the library copy).
+The sketch is `OWM_EPD47_epaper_v2.72.ino`. `platformio.ini` sets `src_dir = .`, so that file is the program. Shared settings, the Wi-Fi portal, and validation live in `config.h`. Weather structs are in `forecast_record.h`. Pins are in `utilities.h` (the sketch includes this copy, not the library copy). Home Assistant MQTT over WebSocket TLS is `mqtt_ha.h`.
 
 Do not commit unless the user asks. Do not put API keys, Wi-Fi passwords, or tokens into this file, logs meant for the user, or new sample output.
 
@@ -63,7 +63,23 @@ Main’s forecast strip is only as many calendar days as fit in `max_readings` (
 
 ## Device settings
 
-Touch can change units (`M` metric or `I` imperial), sleep minutes (5–60, step 5), wake hour, sleep hour, and debug-log enable. **Save** writes the existing Preferences namespace `mem` through `save_config_to_memory()`. Do not invent a second settings store. City, Wi-Fi, API keys, Influx fields, and the mTLS client certificate and private key stay on **Web setup**, which starts the existing WiFiManager portal (`LilyGo-T5S3-weather-wifi`). Those PEMs are Preferences strings (`MTLS_CERT`, `MTLS_PKEY`), not firmware constants. Empty PEMs skip client authentication. Do not print the certificate or private key.
+Touch can change units (`M` metric or `I` imperial), sleep minutes (5–60, step 5), wake hour, sleep hour, and debug-log enable. **Save** writes the existing Preferences namespace `mem` through `save_config_to_memory()`. Do not invent a second settings store. City, Wi-Fi, API keys, Influx fields, the mTLS client certificate and private key, and the MQTT / Cloudflare fields stay on **Web setup**, which starts the existing WiFiManager portal (`LilyGo-T5S3-weather-wifi`). Those PEMs are Preferences strings (`MTLS_CERT`, `MTLS_PKEY`), not firmware constants. Empty PEMs skip client authentication. Do not print the certificate or private key.
+
+MQTT and Cloudflare values use the same `mem` namespace. Portal labels and NVS keys:
+
+| Portal label | NVS key |
+| --- | --- |
+| `wifi_name` | `WiFiSSID` |
+| `wifi_password` | `WiFiPass` |
+| `home_assistant_server_host` | `HaHost` |
+| `CF-Access-Client-Id` | `CfAccessId` |
+| `CF-Access-Client-Secret` | `CfAccessSec` |
+| `mqtt-user` | `MqttUser` |
+| `mqtt-password` | `MqttPass` |
+
+`CF-Access-Client-Id` and `CF-Access-Client-Secret` are HTTP headers on the WebSocket upgrade only (`Sec-WebSocket-Protocol: mqtt`, TLS port 443). They are not MQTT username or password. Send both or neither. `mqtt-user` and `mqtt-password` are the broker `CONNECT` credentials after Cloudflare has proxied the socket. An empty `HaHost` skips MQTT. A host with no path uses `/mqtt`. Do not print the Access secret, the client id, or the MQTT password. `settings.print()` may say only `set` or `empty`.
+
+Publish from `publishWeatherMqtt()` only after onecall, forecast, and air quality all succeed, and before `StopWiFi()`. The retained JSON (current, air, forecast) goes to `lilygo/epd47/<id>/weather`. Discovery configs go to `homeassistant/sensor/lilygo-epd47-<id>/...`. A failed publish must still unmount the card and deep-sleep.
 
 Changing units marks weather stale so the next weather layout refetches. Unsaved edits die at sleep.
 

@@ -16,6 +16,28 @@ Open Weather Map weather station using [LilyGo EPD 4.7" display](https://bit.ly/
 
 [![Presetation video](assets/001.png)](https://www.youtube.com/watch?v=TQaVQcld1Pk)
 
+# Home Assistant MQTT through Cloudflare
+
+After each successful weather read the station can publish current conditions, air quality, and the forecast to a Home Assistant MQTT broker. The broker stays behind Cloudflare. The ESP32 opens a normal HTTPS WebSocket (`wss`, port 443) so Cloudflare can route the connection, read the Access headers, and apply a Zero Trust policy. MQTT itself starts only after that handshake.
+
+Leave `home_assistant_server_host` empty to keep MQTT off. The display and deep sleep still run.
+
+Enter these on the Wi-Fi setup page (`LilyGo-T5S3-weather-wifi`). They are stored with the other station settings.
+
+| Field | What to enter |
+| --- | --- |
+| `wifi_name` | Wi-Fi network the station joins after setup |
+| `wifi_password` | Password for that network |
+| `home_assistant_server_host` | Public Cloudflare hostname. Add a path when the broker is not at `/mqtt` (for example `ha.example.com/mqtt`). `wss://` is optional. Port is 443. |
+| `CF-Access-Client-Id` | Cloudflare Access service-token client id |
+| `CF-Access-Client-Secret` | Cloudflare Access service-token secret |
+| `mqtt-user` | MQTT username on the Home Assistant broker |
+| `mqtt-password` | MQTT password on the Home Assistant broker |
+
+`CF-Access-Client-Id` and `CF-Access-Client-Secret` are sent together as HTTP headers on the WebSocket upgrade, along with `Sec-WebSocket-Protocol: mqtt`. Cloudflare checks those headers before it proxies the socket. The station then sends a normal MQTT login with `mqtt-user` and `mqtt-password`. Set both Access fields, or neither. One without the other is skipped.
+
+The retained weather document is published to `lilygo/epd47/<id>/weather`. Home Assistant discovery sensors are published for the same readings. The Access secret and the MQTT password are not printed on the serial log.
+
 # License
 
 This code created by https://github.com/G6EJD/ is using the GPLv3 https://github.com/Xinyuan-LilyGO/LilyGo-EPD47 library to handle the display and as such falls into the GPLv3 license itself. This situation is described in the https://www.gnu.org/licenses/gpl-faq.html#IfLibraryIsGPL
