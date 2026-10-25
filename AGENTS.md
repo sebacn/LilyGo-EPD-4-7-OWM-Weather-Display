@@ -79,7 +79,7 @@ MQTT and Cloudflare values use the same `mem` namespace. Portal labels and NVS k
 
 `CF-Access-Client-Id` and `CF-Access-Client-Secret` are HTTP headers on the WebSocket upgrade only (`Sec-WebSocket-Protocol: mqtt`, TLS port 443). They are not MQTT username or password. Send both or neither. `mqtt-user` and `mqtt-password` are the broker `CONNECT` credentials after Cloudflare has proxied the socket. An empty `HaHost` skips MQTT. A host with no path uses `/mqtt`. Do not print the Access secret, the client id, or the MQTT password. `settings.print()` may say only `set` or `empty`.
 
-Publish from `publishWeatherMqtt()` only after onecall, forecast, and air quality all succeed, and before `StopWiFi()`. The retained JSON (current, air, forecast) goes to `lilygo/epd47/<id>/weather`. Discovery configs go to `homeassistant/sensor/lilygo-epd47-<id>/...`. A failed publish must still unmount the card and deep-sleep.
+Publish from `publishWeatherMqtt()` only after onecall, forecast, and air quality all succeed, and before `StopWiFi()`. The retained JSON (current, air, forecast, plus `device.battery_pct`, `device.battery_voltage`, and `device.wake_count` from `logInfo`) goes to `lilygo/epd47/<id>/weather`. `collectAndWriteLog()` must run first so `DrawBattery()` has filled `logInfo`. Discovery configs go to `homeassistant/sensor/lilygo-epd47-<id>/...`. A failed publish must still unmount the card and deep-sleep.
 
 Changing units marks weather stale so the next weather layout refetches. Unsaved edits die at sleep.
 

@@ -36,7 +36,7 @@ Enter these on the Wi-Fi setup page (`LilyGo-T5S3-weather-wifi`). They are store
 
 `CF-Access-Client-Id` and `CF-Access-Client-Secret` are sent together as HTTP headers on the WebSocket upgrade, along with `Sec-WebSocket-Protocol: mqtt`. Cloudflare checks those headers before it proxies the socket. The station then sends a normal MQTT login with `mqtt-user` and `mqtt-password`. Set both Access fields, or neither. One without the other is skipped.
 
-The retained weather document is published to `lilygo/epd47/<id>/weather`. Home Assistant discovery sensors are published for the same readings. The Access secret and the MQTT password are not printed on the serial log.
+The retained document is published to `lilygo/epd47/<id>/weather`. It includes current conditions, air quality, the forecast, battery percentage, battery voltage, and the wake count. Home Assistant discovery sensors are published for the same readings. The Access secret and the MQTT password are not printed on the serial log.
 
 # License
 

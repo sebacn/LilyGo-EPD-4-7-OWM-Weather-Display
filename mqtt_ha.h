@@ -637,6 +637,9 @@ inline void publishHaDiscovery(PubSubClient& mqtt, const String& deviceId, const
         {"ozone", "Ozone", "{{ value_json.air.o3 }}", "ozone", "µg/m³", "µg/m³", true},
         {"sulphur_dioxide", "Sulphur dioxide", "{{ value_json.air.so2 }}", "sulphur_dioxide", "µg/m³", "µg/m³", true},
         {"ammonia", "Ammonia", "{{ value_json.air.nh3 }}", nullptr, "µg/m³", "µg/m³", true},
+        {"battery", "Battery", "{{ value_json.device.battery_pct }}", "battery", "%", "%", true},
+        {"battery_voltage", "Battery voltage", "{{ value_json.device.battery_voltage }}", "voltage", "V", "V", true},
+        {"wake_count", "Wake count", "{{ value_json.device.wake_count }}", nullptr, nullptr, nullptr, true},
     };
     const bool imperial = settings.Units == "I";
 
