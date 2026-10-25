@@ -577,6 +577,10 @@ void publishWeatherMqtt() {
   {
     JsonDocument doc;
     fillWeatherDocument(doc);
+    JsonObject device = doc["device"].to<JsonObject>();
+    device["wake_count"] = logInfo.BootCount;
+    device["battery_pct"] = logInfo.BatteryPct;
+    device["battery_voltage"] = logInfo.BatteryVoltage;
     serializeJson(doc, body);
   }
   mqttPublishWeather(body);
